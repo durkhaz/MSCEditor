@@ -1,0 +1,50 @@
+// ==========================================
+// Data read in by MSCeditor, used as pre defined teleport locations and identifiers.
+// Needs to be in same folder as executable and have the file name "data.txt".
+// Add or Change entries if needed.
+// ==========================================
+
+#Locations
+"Garage Table" "-14.3, 2, 1.5"
+"Garage Driveway" "-16.2, 4, 11"
+"Repair Shop" "1553, 7, 723" 
+"Teimo's Shop" "-1554, 4, 1174"
+"Drag Strip" "-1295, 4, -940"
+"Dirt Road" "-284, 4, -813"
+"Graveyard" "-1454, 7, 1145"
+"Inspection" "-1533, 7, 1251"
+"Junkyard" "-787, 15, -645"
+"Antenna" "-330, 5, 1371"
+"Compost" "0, 4, 0"
+
+
+// ==========================================
+// These are used by the Satsuma report to identify car parts properly. 
+// If the report function doesn't work, that means the game probably 
+// received an update that changed how the variables are named. 
+// You can probably fix this yourself by changing the keys here
+// ==========================================
+
+#Report_Identifiers 
+"bolted" // bolted , a bool where I'm not sure how it works, but it's probably important. 
+"bolts" // bolts , a stringlist keeping track of all bolt states on a part. Only exists when the part has bolts, and is installed
+"damaged" //damaged , a bool saving the damage state of a part
+"installed" //installed , a bool used by the tool to identify a carpart
+"tightness" //tightness , a float that is the sum of all bolt states on a part. Only exists when the part has bolts
+
+
+// ==========================================
+// Some special cases for the Satsuma report
+// "string to match" "SCid" "param"(optional)
+// SCids:
+// 0 : tightness offset, by boltstates
+// 1 : 
+// 2 : hide entries in report
+// ==========================================
+
+#Report_Special
+"oilpan" "0" "-8" //big bolt at the bottom of the pan doesn't count towards tightness because reasons
+"alternator" "0" "-8" //alternator rotation doesn't count towards tightness
+//"alternator"  "1" "alternatorrotation"
+"motorhoist" "2" 
+"warningtriangle" "2" 
