@@ -2,7 +2,8 @@
 
 #include <string> 
 #include <tchar.h> 
-
+#include <algorithm> 
+typedef unsigned int UINT;
 
 struct QTRN
 {
@@ -24,98 +25,109 @@ struct TextLookup
 	std::wstring badstring;
 	std::wstring newstring;
 
-	TextLookup(std::wstring a, std::wstring b)
+	TextLookup(std::wstring a_, std::wstring b_)
+		: badstring(std::move(a_)), newstring(std::move(b_))
 	{
-		badstring = a;
-		newstring = b;
+
 	}
 };
 
 struct CarPart
 {
 	std::wstring name = _T("");
-	unsigned int iInstalled = UINT_MAX;
-	unsigned int iBolts = UINT_MAX;
-	unsigned int iTightness = UINT_MAX;
-	unsigned int iBolted = UINT_MAX;
-	unsigned int iDamaged = UINT_MAX;
+	UINT iInstalled = UINT_MAX;
+	UINT iBolts = UINT_MAX;
+	UINT iTightness = UINT_MAX;
+	UINT iBolted = UINT_MAX;
+	UINT iDamaged = UINT_MAX;
 };
 
 struct IndexLookup
 {
-	unsigned int index1;
-	unsigned int index2;
+	UINT index1;
+	UINT index2;
 
-	IndexLookup(unsigned int aindex1, unsigned int aindex2)
+	IndexLookup(UINT index1_, UINT index2_)
+		: index1(std::move(index1_)), index2(std::move(index2_))
 	{
-		index1 = aindex1;
-		index2 = aindex2;
-	}
-};
 
-struct Variable
-{
-	unsigned int pos;
-	unsigned int type;
-	std::wstring key;
-	std::string value;
-	std::string static_value;
-	unsigned int group;
-	bool modified;
-
-	Variable(std::string avalue, unsigned int apos, unsigned int atype, std::wstring akey = _T("transform"), unsigned int agroup = -1)
-	{
-		key = akey;
-		value = avalue;
-		static_value = avalue;
-		pos = apos;
-		type = atype;
-		group = agroup;
-		modified = false;
 	}
 };
 
 struct Entry
 {
 	std::wstring name;
-	unsigned int index;
+	UINT index;
 
-	Entry(std::wstring aname, unsigned int aindex)
+	Entry(std::wstring name_, UINT index_)
+		: name(std::move(name_)), index(std::move(index_))
 	{
-		name = aname;
-		index = aindex;
+
 	}
 
 	inline
 		friend bool operator <(const Entry& x, const Entry& y) //operator overload for sorting 
 	{
-		return x.name < y.name;
+		std::wstring xname = x.name;
+		std::wstring yname = y.name;
+		transform(xname.begin(), xname.end(), xname.begin(), ::tolower);
+		transform(yname.begin(), yname.end(), yname.begin(), ::tolower);
+		return xname < yname;
 	}
 };
 
 struct SC
 {
 	std::wstring str = _T("");
-	unsigned int id = -1;
+	UINT id = -1;
 	std::wstring param = _T("");
 
-	SC(std::wstring _str, unsigned int _id, std::wstring _param)
+	SC(std::wstring str_, UINT id_, std::wstring param_)
+		: str(std::move(str_)), id(std::move(id_)), param(std::move(param_))
 	{
-		str = _str;
-		id = _id;
-		param = _param;
+
+	}
+};
+
+struct ErrorCode
+{
+	int id;
+	int info;
+
+	ErrorCode(int id_, int info_ = -1)
+		: id(std::move(id_)), info(std::move(info_))
+	{
+
 	}
 };
 
 struct Overview
 {
-	unsigned int numMaxBolts = 0;
-	unsigned int numBolts = 0;
-	unsigned int numLooseBolts = 0;
-	unsigned int numInstalled = 0;
-	unsigned int numParts = 0;
-	unsigned int numFixed = 0;
-	unsigned int numLoose = 0;
-	unsigned int numStuck = 0;
-	unsigned int numDamaged = 0;
+	UINT numMaxBolts = 0;
+	UINT numBolts = 0;
+	UINT numLooseBolts = 0;
+	UINT numInstalled = 0;
+	UINT numParts = 0;
+	UINT numFixed = 0;
+	UINT numLoose = 0;
+	UINT numStuck = 0;
+	UINT numDamaged = 0;
+};
+
+struct Position
+{
+	UINT index;
+	UINT position;
+
+	Position(UINT index_, UINT position_)
+		: index(std::move(index_)), position(std::move(position_))
+	{
+
+	}
+
+	inline 
+		friend bool operator <(const Position& x, const Position& y) 
+	{
+		return x.position < y.position;
+	}
 };

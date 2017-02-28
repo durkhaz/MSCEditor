@@ -5,27 +5,20 @@
 #include <vector> 
 #include <string> 
 #include <tchar.h> 
+#include "variable.h"
 
-#define HX_STARTENTRY 0x7E
-#define HX_ENDENTRY 0x7B
+#define HX_STARTENTRY	0x7E
+#define HX_ENDENTRY		0x7B
 
-#define ID_STRINGL 0
-#define ID_TRANSFORM 1
-#define ID_FLOAT 2
-#define ID_STRING 3
-#define ID_BOOL 4
-#define ID_COLOR 5
-#define ID_INT 6
+#define ID_STRINGL		0
+#define ID_TRANSFORM	1
+#define ID_FLOAT		2
+#define ID_STRING		3
+#define ID_BOOL			4
+#define ID_COLOR		5
+#define ID_INT			6
 
-/*
-//fallback
-#define HX_TRANSFORM4 52
-#define HX_TRANSFORM6 54
-#define HX_TRANSFORM8 56
-#define HX_FLOAT 10
-#define HX_BOOL 7
-#define HX_COLOR 22
-*/
+#define LPARAM_OFFSET	100000
 
 extern WNDPROC DefaultListCtrlProc, DefaultListViewProc, DefaultEditProc, DefaultComboProc;
 extern int iItem, iSubItem;
@@ -35,11 +28,15 @@ extern std::vector<std::wstring> entries;
 extern std::vector<Variable> variables;
 extern std::vector<IndexLookup> indextable;
 extern std::vector<TextLookup> locations;
+extern std::vector<Item> itemTypes;
+extern std::vector<ItemAttribute> itemAttributes;
 extern std::vector<CarPart> carparts;
 extern std::vector<SC> partSCs;
 extern std::vector<std::wstring> partIdentifiers;
 extern std::wstring filepath;
+extern std::wstring filename;
 extern SYSTEMTIME filedate;
+extern HFONT hFont;
 
 
 
@@ -51,9 +48,11 @@ extern const double kindasmall;
 
 extern const double pi;
 
-extern const TCHAR* bools[2];
+extern const std::wstring bools[2];
 
-extern const TCHAR Title[];
+extern const std::wstring Version;
+
+extern const std::wstring Title;
 
 extern const std::wstring GLOB_STRS[];
 

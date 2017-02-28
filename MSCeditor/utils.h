@@ -10,16 +10,62 @@
 //templates
 
 template <typename TSTRING>
-bool FetchDataFileParameters(const TSTRING &str, std::string::size_type &startStr, std::string::size_type &endStr)
+BOOL EntryExists(const TSTRING &str)
 {
-	startStr = str.find('"');
-	if (startStr == std::string::npos) return FALSE;
-	startStr++;
-	if (startStr >= str.size()) return FALSE;
+	int it;
+	std::wstring key = StringToWString(str);
+	transform(key.begin(), key.end(), key.begin(), ::tolower);
+	UINT startindex = (UINT)((((float)key[0] - 97) / 25) * variables.size());
+	variables[startindex].key != key ? variables[startindex].key > key ? it = -1 : it = 1 : it = 0;
+	if (it != 0)
+	{
+		for (startindex; startindex < variables.size() && startindex >= 0; startindex += it)
+		{
+			if (variables[startindex].key == key)
+				return startindex;
+			if (it == -1 && variables[startindex].key < key)
+				return -1;
+			if (it == 1 && variables[startindex].key > key)
+				return -1;
+		}
+	}
+	else
+		return startindex;
 
-	endStr = str.substr(startStr).find('"');
-	if (endStr == std::string::npos || endStr == 0) return FALSE;
-	return TRUE;
+	return -1;
+}
+
+template <typename TSTRING>
+BOOL FetchDataFileParameters(const TSTRING &str, std::string::size_type &startStr, std::string::size_type &endStr)
+{
+	startStr = std::string::npos;
+	endStr = std::string::npos;
+
+	for (UINT i = 0; i < str.size(); i++)
+	{
+		if (str[i] == '"')
+		{
+			if (startStr == std::string::npos)
+			{
+				startStr = i + 1;
+				continue;
+			}
+			if (endStr == std::string::npos)
+			{
+				endStr = i;
+				break;
+			}
+		}
+		if (str[i] == '#')
+		{
+			if (startStr == std::string::npos || endStr != std::string::npos)
+				return 2;
+		}
+		if (str[i] == '/' && i < str.size() - 1)
+			if (str[i + 1] == '/')
+				break;
+	}
+	return (endStr == std::string::npos);
 }
 
 template <typename TSTRING>
@@ -38,30 +84,35 @@ std::wstring StringToWString(const TSTRING &s)
 
 // forward declares
 
-std::wstring ReadRegistry(HKEY root, std::wstring key, std::wstring name);
+BOOL DownloadUpdatefile(const std::wstring url, std::wstring &path);
+BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &changelog);
+std::wstring ReadRegistry(const HKEY root, const std::wstring key, const std::wstring name);
 int CALLBACK AlphComp(LPARAM lp1, LPARAM lp2, LPARAM sortParam);
 void OnSortHeader(LPNMLISTVIEW pLVInfo);
-LPARAM MakeLPARAM(const unsigned int &i, const unsigned int &j, const bool &negative = false);
+LPARAM MakeLPARAM(const UINT &i, const UINT &j, const bool &negative = false);
 void BreakLPARAM(const LPARAM &lparam, int &i, int &j);
 
 void OpenFileDialog();
 void InitMainDialog(HWND hwnd);
+bool FileChanged();
 int SaveFile();
 void UnloadFile();
 bool CanClose();
 inline bool WasModified();
 void ClearStatic(HWND hStatic, HWND hDlg);
+void FreeLPARAMS(HWND hwnd);
+BOOL LoadDataFile(const std::wstring &datafilename);
 
 int CompareStrs(const std::wstring &str1, const std::wstring &str2);
 int CompareBolts(const std::wstring &str1, const std::wstring &str2);
-void PopulateBList(HWND hwnd, const CarPart *part, unsigned int &item, Overview *ov);
+void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov);
 void UpdateBOverview(HWND hwnd, Overview *ov);
 void UpdateBListParams(HWND &hList);
 void UpdateBDialog();
 void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::string &bin = "");
 void UpdateList(const std::wstring &str = _T(""));
-template <typename TSTRING> void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &type);
-template <typename TSTRING> void FormatValue(std::string &str, const TSTRING &value, const unsigned int &type);
+template <typename TSTRING> void FormatString(std::wstring &str, const TSTRING &value, const UINT &type);
+template <typename TSTRING> void FormatValue(std::string &str, const TSTRING &value, const UINT &type);
 
 std::string BinToFloatStr(const std::string &str);
 std::wstring BinToFloatStr(const std::wstring &str);
@@ -73,19 +124,19 @@ void BatchProcessStuck();
 void BatchProcessUninstall();
 void BatchProcessBolts(bool fix);
 void BatchProcessDamage(bool all);
-bool BinToBolts(const std::string &str, unsigned int &bolts, unsigned int &maxbolts, std::vector<unsigned int> &boltlist);
-std::string BoltsToBin(std::vector<unsigned int> &bolts);
+bool BinToBolts(const std::string &str, UINT &bolts, UINT &maxbolts, std::vector<UINT> &boltlist);
+std::string BoltsToBin(std::vector<UINT> &bolts);
+int Variables_add(Variable var);
+bool Variables_remove(const UINT &index);
+bool GroupRemoved(const UINT &group, const UINT &index = UINT_MAX, const bool &IsFirst = FALSE);
+UINT ParseItemID(const std::wstring &str, const UINT sIndex);
+bool StartsWithStr(const std::wstring &target, const std::wstring &str);
 bool ContainsStr(const std::wstring &target, const std::wstring &str);
-//void ReplaceString(const unsigned int start, std::string &buffer, const std::string &value);
-unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::string &bin, const bool allownegative = 1, const bool normalized = 0, const bool eulerconvert = 0, const QTRN *oldq = NULL, const std::string &oldbin = "");
+UINT VectorStrToBin(std::wstring &str, const UINT &size, std::string &bin, const bool allownegative = 1, const bool normalized = 0, const bool eulerconvert = 0, const QTRN *oldq = NULL, const std::string &oldbin = "");
 bool QuatEqual(const QTRN *a, const QTRN *b);
 QTRN EulerToQuat(const ANGLES *angles);
 ANGLES QuatToEuler(const QTRN *q);
-//inline double rad2deg(const double &rad);
-//inline double deg2rad(const double &degrees);
 void TruncFloatStr(std::wstring &str);
 void TruncFloatStr(std::string &str);
 bool IsValidFloatStr(const std::wstring &str);
-//void CreateMainMenu(HWND hWnd);
-//std::string FallbackGetValues(unsigned int &index, const char* buffer);
-bool ScoopSavegame();
+ErrorCode ScoopSavegame();

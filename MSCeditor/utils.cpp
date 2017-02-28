@@ -2,8 +2,102 @@
 #include <shobjidl.h> //COM
 #include <fstream> //file stream input output
 #include <algorithm> //sort
+#include <Urlmon.h>
 
-std::wstring ReadRegistry(HKEY root, std::wstring key, std::wstring name)
+void GetPathToTemp(std::wstring &path)
+{
+	TCHAR buffer[MAX_PATH];
+	
+	if (GetTempPath(MAX_PATH, buffer))
+	{
+		path = buffer;
+		path += L"\\MSCeditor";
+		CreateDirectory(path.c_str(), NULL);
+	}
+}
+
+BOOL DownloadUpdatefile(const std::wstring url, std::wstring &path)
+{
+	GetPathToTemp(path);
+	path += L"\\update.tmp";
+	return URLDownloadToFile(NULL, (LPCWSTR)url.c_str(), (LPCWSTR)path.c_str(), 0, NULL);
+}
+
+void FlipString(std::string &str, std::wstring file = L"")
+{
+	for (UINT i = 0; i < str.size(); i++)
+	{
+		str[i] = ~str[i];
+	}
+	if (!file.empty())
+	{
+		std::ofstream outf(file, std::ofstream::binary);
+		outf << str;
+	}
+}
+
+BOOL ParseUpdateData(const std::string &str, std::vector<std::string> &strs)
+{
+	UINT i = 0;
+
+	while (TRUE)
+	{
+		UINT size = (UINT)str[i];
+		strs.push_back(str.substr(i + 1, size));
+		i += 1 + size;
+		if ((i + 1) >= str.size())
+			break;
+	}
+	return i == str.size();
+}
+
+BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &changelog)
+{
+	using namespace std;
+
+	ifstream iwc(file, ifstream::in, ifstream::binary);
+	if (!iwc.is_open())
+		return 1;
+
+	iwc.seekg(0, iwc.end);
+	UINT length = static_cast<int>(iwc.tellg());
+	iwc.seekg(0, iwc.beg);
+	char *buffer = new char[length + 1];
+	memset(buffer, '\0', length + 1);
+	iwc.read(buffer, length);
+	iwc.close();
+	std::string str = buffer;
+	//FlipString(str, L"invert");
+	delete[] buffer;
+	FlipString(str);
+	std::vector<std::string> strs;
+	bool up2date = TRUE;
+	if (ParseUpdateData(str, strs))
+	{
+		for (UINT i = 0; (i + 1) < strs.size(); i++)
+		{
+			if ((strs[i]) == "changelog")
+			{
+				changelog = StringToWString(strs[i + 1]);
+			}
+			if ((strs[i]) == "path1")
+			{
+				apppath = StringToWString(strs[i + 1]);
+			}
+			if ((strs[i]) == "version")
+			{
+				double uVer = static_cast<float>(::strtod(strs[i + 1].c_str(), NULL));
+				double fVer = static_cast<float>(::wcstod(Version.c_str(), NULL));
+				if (uVer > fVer)
+					up2date = FALSE;
+
+			}
+		}
+	}
+	return (!up2date && !changelog.empty() && !apppath.empty());
+}
+
+std::wstring ReadRegistry(const HKEY root, const std::wstring key, const std::wstring name)
 {
 	HKEY hKey;
 	if (RegOpenKeyEx(root, key.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS)
@@ -90,7 +184,10 @@ BOOL GetLastWriteTime(LPTSTR pszFilePath, SYSTEMTIME &stUTC)
 	if (hFile != INVALID_HANDLE_VALUE)
 	{
 		if (!GetFileTime(hFile, &ftCreate, &ftAccess, &ftWrite))
+		{ 
+			CloseHandle(hFile);
 			return FALSE;
+		}
 		FileTimeToSystemTime(&ftWrite, &stUTC);
 		CloseHandle(hFile);
 	}
@@ -98,19 +195,21 @@ BOOL GetLastWriteTime(LPTSTR pszFilePath, SYSTEMTIME &stUTC)
 	return TRUE;
 }
 
-LPARAM MakeLPARAM(const unsigned int &i, const unsigned int &j, const bool &negative)
+LPARAM MakeLPARAM(const UINT &i, const UINT &j, const bool &negative)
 {
+	if (i > static_cast<int>(INT_MAX/LPARAM_OFFSET) || j > (LPARAM_OFFSET - 1))
+		return (LPARAM)0;
 	int k;
 	negative ? k = -1 : k = 1;
-	return (LPARAM)((i * 10000 + j) * k);
+	return (LPARAM)((i * LPARAM_OFFSET + j) * k);
 }
 
 void BreakLPARAM(const LPARAM &lparam, int &i, int &j)
 {
-	if (lparam > 9999)
+	if (lparam >= (LPARAM_OFFSET))
 	{
-		i = lparam / 10000;
-		j = lparam - (i * 10000);
+		i = lparam / LPARAM_OFFSET;
+		j = lparam - (i * LPARAM_OFFSET);
 	}
 	else
 	{
@@ -121,11 +220,11 @@ void BreakLPARAM(const LPARAM &lparam, int &i, int &j)
 
 int CompareStrs(const std::wstring &str1, const std::wstring &str2)
 {
-	unsigned int max = str1.size();
+	UINT max = str1.size();
 	if (str1.size() > str2.size())
 		max = str2.size();
 
-	for (unsigned int i = 0; i < max; i++)
+	for (UINT i = 0; i < max; i++)
 	{
 		if (str1[i] > str2[i]) return 1;
 		if (str1[i] < str2[i]) return -1;
@@ -171,15 +270,59 @@ void UpdateBListParams(HWND &hList)
 	LVITEM lvi;
 	lvi.mask = LVIF_PARAM;
 
-	unsigned int max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	UINT max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
 
-	for (unsigned int i = 0; i < max; i++)
+	for (UINT i = 0; i < max; i++)
 	{
 		lvi.iItem = i;
 		lvi.iSubItem = 0;
 		lvi.lParam = i;
 		ListView_SetItem(hList, (LPARAM)&lvi);
 	}
+}
+
+UINT GetGroupStartIndex(const UINT &group, const UINT &index = UINT_MAX)
+{
+	if (group == 0) return 0;
+	if (index == UINT_MAX)
+	{
+		for (UINT i = 0; i < variables.size(); i++)
+		{
+			if (variables[i].group == group)
+				return i;
+		}
+	}
+	else
+	{
+		if (variables[index].group != group)
+			return GetGroupStartIndex(group, UINT_MAX);
+		for (UINT i = index; i >= 0; i--)
+		{
+			if (variables[i].group == (group - 1))
+				return (i + 1);
+		}
+	}
+	return UINT_MAX;
+}
+
+LVITEM GetGroupEntry(const UINT &group)
+{
+	HWND hList = GetDlgItem(hDialog, IDC_List);
+	UINT max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	LVITEM lvi;
+	lvi.mask = LVIF_PARAM;
+	lvi.iSubItem = 0;
+	lvi.iItem = -1;
+	for (UINT i = 0; i < max; i++)
+	{
+		lvi.iItem = i;
+		ListView_GetItem(hList, (LPARAM)&lvi);
+		ListParam* listparam = (ListParam*)lvi.lParam;
+
+		if (listparam->GetIndex() == group)
+			break;
+	}
+	return lvi;
 }
 
 bool DatesMatch(SYSTEMTIME stUTC)
@@ -198,11 +341,51 @@ bool DatesMatch(SYSTEMTIME stUTC)
 	else return TRUE;
 }
 
+bool FileChanged()
+{
+	SYSTEMTIME stUTC;
+	GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC);
+
+	if (!DatesMatch(stUTC))
+	{
+		TCHAR buffer[256];
+		memset(buffer, 0, 256);
+		swprintf(buffer, 256, GLOB_STRS[17].c_str(), filepath.c_str());
+		switch (MessageBox(NULL, buffer, Title.c_str(), MB_YESNO | MB_ICONWARNING))
+		{
+			case IDNO:
+			{
+				std::wstring tmpPath;
+				GetPathToTemp(tmpPath);
+				tmpPath += L"\\file.tmp";
+
+				HANDLE hFile = CreateFileW(tmpPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+				if (hFile != INVALID_HANDLE_VALUE)
+				{
+					CloseHandle(hFile);
+					DeleteFile(filepath.c_str());
+					CopyFileEx(tmpPath.c_str(), filepath.c_str(), NULL, NULL, FALSE, 0);
+					break;
+				}
+				else
+				{
+					MessageBox(NULL, GLOB_STRS[38].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+					//leak into IDYES to reload
+				}
+				
+			}
+			case IDYES:
+				InitMainDialog(hDialog);
+				break;
+		}
+	}
+	return FALSE;
+}
+
 void OpenFileDialog()
 {
 	std::wstring fpath;
-	SYSTEMTIME stUTC;
-	BOOL date;
+	std::wstring fname;
 
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	if (SUCCEEDED(hr))
@@ -272,10 +455,13 @@ void OpenFileDialog()
 				if (SUCCEEDED(hr))
 				{
 					PWSTR pszFilePath;
-					hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
+					PWSTR pszFileName;
+					pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
+					pItem->GetDisplayName(SIGDN_NORMALDISPLAY, &pszFileName);
 					fpath = pszFilePath;
-					date = GetLastWriteTime(pszFilePath, stUTC);
+					fname = pszFileName;
 					CoTaskMemFree(pszFilePath);
+					CoTaskMemFree(pszFileName);
 					pItem->Release();
 				}
 			}
@@ -283,19 +469,10 @@ void OpenFileDialog()
 		}
 		CoUninitialize();
 
-		if (!fpath.empty())
+		if (!fpath.empty() && !fname.empty())
 		{
 			filepath = fpath;
-			if (date)
-			{
-				filedate = stUTC;
-				filedateinit = TRUE;
-			}
-			else
-			{
-				MessageBox(hDialog, GLOB_STRS[6].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
-				filedateinit = FALSE;
-			}
+			filename = fname;
 			InitMainDialog(hDialog);
 		}
 	}
@@ -303,9 +480,15 @@ void OpenFileDialog()
 
 void UnloadFile()
 {
-	SetWindowText(hDialog, (LPCWSTR)Title);
+	std::wstring tmppath;
+	GetPathToTemp(tmppath);
+	tmppath += L"\\file.tmp";
+	DeleteFile(tmppath.c_str());
+
+	SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 	HWND hList1 = GetDlgItem(hDialog, IDC_List);
 	HWND hList2 = GetDlgItem(hDialog, IDC_List2);
+	FreeLPARAMS(hList1);
 	SendMessage(hList1, LVM_DELETEALLITEMS, 0, 0);
 	SendMessage(hList2, LVM_DELETEALLITEMS, 0, 0);
 	ListView_SetBkColor(hList1, (COLORREF)GetSysColor(COLOR_MENU));
@@ -326,8 +509,17 @@ void UnloadFile()
 	carparts.clear();
 
 	HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
+	EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
 	EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_GRAYED);
 	EnableMenuItem(menu, GetMenuItemID(menu, 4), MF_GRAYED);
+
+	menu = GetSubMenu(GetMenu(hDialog), 1);
+	EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_GRAYED);
+
+	MENUITEMINFO info = { sizeof(MENUITEMINFO) };
+	info.fMask = MIIM_STATE;
+	info.fState = MFS_GRAYED;
+	SetMenuItemInfo(menu, 3, TRUE, &info);
 }
 
 bool CanClose()
@@ -338,7 +530,7 @@ bool CanClose()
 		memset(buffer, 0, 128);
 		swprintf(buffer, 128, GLOB_STRS[7].c_str(), filepath.c_str());
 
-		switch (MessageBox(NULL, buffer, Title, MB_YESNOCANCEL | MB_ICONWARNING))
+		switch (MessageBox(NULL, buffer, Title.c_str(), MB_YESNOCANCEL | MB_ICONWARNING))
 		{
 		case IDNO:
 			return TRUE;
@@ -364,12 +556,166 @@ bool CanClose()
 	}
 }
 
-//checks if values were modified
+template <typename TSTRING>
+void KillWhitespaces(TSTRING &str)
+{
+	TSTRING tmp;
+	tmp.reserve(str.size());
+	for (UINT i = 0; i < str.size(); i++)
+	{
+		if (!isspace(str[i]))
+			tmp += str[i];
+	}
+	str = tmp;
+}
+
+std::vector<char> MakeCharArray(std::wstring &str)
+{
+	std::vector<char> cArray;
+	UINT iC = 0, iP = 0;
+	KillWhitespaces(str);
+
+	while (iC < str.size())
+	{
+		if (str[iC] == ',')
+		{
+			cArray.push_back(static_cast<char>(static_cast<int>(::wcstol(str.substr(iP, iC - iP).c_str(), NULL, 10))));
+			iP = iC + 1;
+		}
+		iC++;
+	}
+	cArray.push_back(static_cast<char>(static_cast<int>(::wcstol(str.substr(iP, iC - iP).c_str(), NULL, 10))));
+	return cArray;
+}
+
+// This is a disgusting mess. I should probably do this function properly, but I'm not getting paid for this shit so deal with it, nerd
+void FillVector(const std::vector<std::wstring> &params, const std::wstring &identifier)
+{
+	if (identifier == L"Locations")
+	{
+		if (params.size() == 2)
+		{
+			std::string bin;
+			std::wstring coords = params[1];
+			VectorStrToBin(coords, 3, bin);
+			VectorStrToBin(std::wstring(_T("0,0,0,1")), 4, bin);
+			VectorStrToBin(std::wstring(_T("1,1,1")), 3, bin);
+			locations.push_back(TextLookup(params[0], StringToWString(bin)));
+		}
+	}
+	else if (identifier == L"Items")
+	{
+		switch (params.size())
+		{
+			case 3:
+				itemTypes.push_back(Item(WStringToString(params[0]), MakeCharArray(std::wstring(params[1])), WStringToString(params[2])));
+				break;
+			case 2:
+				itemTypes.push_back(Item(WStringToString(params[0]), MakeCharArray(std::wstring(params[1]))));
+				break;
+		}
+	}
+	else if (identifier == L"Item_Attributes")
+	{
+		if (params.size() >= 3)
+		{
+			std::string s = WStringToString(params[1]);
+			char c = static_cast<char>(static_cast<int>(::wcstol(params[2].c_str(), NULL, 10)));
+			if (params.size() == 3)
+				itemAttributes.push_back(ItemAttribute(s, c));
+			else if (params.size() == 5)
+				itemAttributes.push_back(ItemAttribute(s, c, static_cast<int>(::wcstol(params[3].c_str(), NULL, 10)), static_cast<int>(::wcstol(params[4].c_str(), NULL, 10))));
+		}
+	}
+	else if (identifier == L"Report_Identifiers")
+	{
+		if (params.size() == 1)
+			partIdentifiers.push_back(params[0]);
+	}
+	else if (identifier == L"Report_Special")
+	{
+		if (params.size() >= 2)
+		{
+			std::wstring param = _T("");
+			if (params.size() == 3)
+				param = params[2];
+			partSCs.push_back(SC(params[0], static_cast<int>(::strtol(WStringToString(params[1]).c_str(), NULL, 10)), param));
+		}
+	}
+
+}
+
+BOOL LoadDataFile(const std::wstring &datafilename)
+{
+	using namespace std;
+
+	wstring strInput, identifier;
+	vector<wstring> params;
+	wifstream inf(datafilename, wifstream::in);
+	if (!inf.is_open())
+		return 1;
+
+	getline(inf, strInput);
+	while (inf)
+	{
+		for (UINT i = 0; i < strInput.size(); i++)
+		{
+			if (strInput[i] == '/')
+				if (i + 1 < strInput.size())
+					if (strInput[i + 1] == '/')
+						break;
+			if (strInput[i] == '#')
+			{
+				string::size_type startpos = 0, endpos = 0;
+				if (FetchDataFileParameters(strInput.substr(i + 1), startpos, endpos) == 0)
+					identifier = strInput.substr(startpos + 1, endpos - startpos);
+				break;
+			}
+		}
+		if (!identifier.empty())
+		{
+			bool LinesLeft = true;
+			while (LinesLeft && !inf.eof())
+			{
+				getline(inf, strInput);
+				string::size_type startpos = 0, endpos = 0, offset = 0;
+				bool LineNotDone = true;
+				while (LineNotDone && LinesLeft)
+				{
+					switch (FetchDataFileParameters(strInput.substr(offset), startpos, endpos))
+					{
+						case 0:
+							params.push_back(strInput.substr(startpos + offset, endpos - startpos));
+							offset += endpos + 1;
+							LineNotDone = !(offset >= strInput.size());
+							break;
+						case 1:
+							LineNotDone = false;
+							break;
+						case 2:
+							LinesLeft = false;
+							break;
+					}
+				}
+				if (!params.empty())
+				{
+					FillVector(params, identifier);
+					params.clear();
+				}
+			}
+			identifier.clear();
+			continue;
+		}
+		getline(inf, strInput);
+	}
+	return 0;
+}
+
 inline bool WasModified()
 {
-	for (unsigned int i = 0; i < variables.size(); i++)
+	for (UINT i = 0; i < variables.size(); i++)
 	{
-		if (variables[i].modified)
+		if (variables[i].IsModified() || variables[i].IsAdded() || variables[i].IsRemoved())
 		{
 			return TRUE;
 		}
@@ -377,21 +723,26 @@ inline bool WasModified()
 	return FALSE;
 }
 
+void TruncTailingNulls(std::string *str)
+{
+	UINT i = str->size() - 1;
+	for (i; str->at(i) == '\0'; i--);
+	str->resize(i + 1);
+}
+
 int SaveFile()
 {
 	using namespace std;
 
-	SYSTEMTIME stUTC;
-	GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC);
-	if (!DatesMatch(stUTC)) return 5;
+	FileChanged();
 
 	ifstream iwc(filepath, ifstream::binary);
 	if (!iwc.is_open()) return 1;
 
 	iwc.seekg(0, iwc.end);
-	unsigned int length = static_cast<int>(iwc.tellg());
+	UINT length = static_cast<int>(iwc.tellg());
 	iwc.seekg(0, iwc.beg);
-	std::string buffer(length + 1, '\0');
+	string buffer(length + 1, '\0');
 	iwc.read((char*)buffer.data(), length);
 
 	if (iwc.bad() || iwc.fail())
@@ -401,67 +752,91 @@ int SaveFile()
 	}
 	iwc.close();
 
-	for (unsigned int i = 0; i < variables.size(); i++)
-	{
-		if (variables[i].modified)
-		{
-			std::string str;
-			switch (variables[i].type)
-			{
-			case ID_STRING:
-			case ID_STRINGL:
-				char intstr[4];
-				for (unsigned int j = 0; j < 4; ++j)
-				{
-					intstr[j] = (char)buffer[variables[i].pos + j];
-				}
-				int old_length;
-				old_length = *((int*)&intstr);
+	TruncTailingNulls(&buffer);
 
-				FormatValue(str, to_string(variables[i].value.size() + ValIndizes[variables[i].type][0] + 1), ID_INT);
-				buffer.replace(variables[i].pos, str.size(), str);
-				buffer.replace(variables[i].pos + 4 + ValIndizes[variables[i].type][0], old_length - ValIndizes[variables[i].type][0] - 1, variables[i].value);
-				break;
-			case ID_FLOAT:
-			case ID_BOOL:
-			case ID_COLOR:
-			case ID_INT:
-			case ID_TRANSFORM:
-				buffer.replace(variables[i].pos + 4 + ValIndizes[variables[i].type][0], ValIndizes[variables[i].type][1], variables[i].value);
+	vector<Position> offsets;
+	for (UINT i = 0; i < variables.size(); i++)
+	{
+		if (variables[i].IsModified() ||  variables[i].IsRemoved() || variables[i].IsAdded())
+		{
+			offsets.push_back(Position(i, variables[i].pos));
+		}
+	}
+	std::sort(offsets.begin(), offsets.end());
+
+	int offset_sum = 0;
+
+	for (UINT i = 0; i < offsets.size(); i++)
+	{
+		UINT index = offsets[i].index;
+		string str;
+		UINT kLength = static_cast<int>(buffer[variables[index].pos + offset_sum + 1]) + 2;
+
+		char intstr[4];
+		for (UINT j = 0; j < 4; ++j)
+		{
+			intstr[j] = (char)buffer[variables[index].pos + kLength + offset_sum + j];
+		}
+		int vLength = *((int*)&intstr);
+
+		if (variables[index].IsRemoved())
+		{
+			int eLength = kLength + 4 + vLength;
+			buffer.erase(variables[index].pos + offset_sum, eLength);
+			offset_sum += -eLength;
+		}
+		else if (variables[index].IsAdded())
+		{
+			buffer += variables[index].MakeEntry();
+		}
+		else
+		{
+			switch (variables[index].type)
+			{
+				case ID_STRING:
+				case ID_STRINGL:
+				case ID_TRANSFORM:
+					FormatValue(str, to_string(variables[index].value.size() + ValIndizes[variables[index].type][0] + 1), ID_INT);
+
+					buffer.replace(variables[index].pos + kLength + offset_sum, str.size(), str);
+					buffer.replace(variables[index].pos + kLength + offset_sum + 4 + ValIndizes[variables[index].type][0], vLength - ValIndizes[variables[index].type][0] - 1, variables[index].value);
+
+					offset_sum += variables[index].value.size() - (vLength - ValIndizes[variables[index].type][0] - 1);
+					break;
+				default:
+					buffer.replace(variables[index].pos + kLength + offset_sum + 4 + ValIndizes[variables[index].type][0], ValIndizes[variables[index].type][1], variables[index].value);
 			}
 		}
 	}
-	string bla = WStringToString(filepath);
-	const char* bbla = bla.c_str();
 
 	if (MakeBackup)
 	{
-		std::wstring fpath = filepath;
-		size_t found = fpath.find_last_of(_T("."));
-		if (found == std::string::npos) fpath += _T("_backup01");
-		else fpath = fpath.insert(found, _T("_backup01"));
+		wstring nfilepath = filepath;
+		size_t found = nfilepath.find_last_of(_T("."));
+		if (found == string::npos)
+			found = nfilepath.size() - 1;
+		nfilepath = nfilepath.insert(found, _T("_backup01"));
 
-		string bfstr = WStringToString(fpath);
-		const char* bcstr = bfstr.c_str();
-
-		if (::rename(bbla, bcstr) != 0)
+		if (MoveFileEx(filepath.c_str(), nfilepath.c_str(), MOVEFILE_WRITE_THROUGH) == 0)
 		{
-			if (errno != 17) return 2;
-			while (errno == 17)
+			DWORD eword = GetLastError();
+			if (eword != ERROR_ALREADY_EXISTS) return 2;
+			while (eword == ERROR_ALREADY_EXISTS)
 			{
-				std::string _tmp = to_string(stoi(bfstr.substr(found + 7, 2), nullptr, 10) + 1);
-				if (_tmp.size() == 1) _tmp.insert(0, "0");
-				bfstr.replace(found + 7, 2, _tmp);
-				bcstr = bfstr.c_str();
-				::rename(bbla, bcstr);
+				wstring _tmp = to_wstring(stoi(nfilepath.substr(found + 7, 2), nullptr, 10) + 1);
+				if (_tmp.size() == 1) _tmp.insert(0, L"0");
+				nfilepath.replace(found + 7, 2, _tmp);
+				MoveFileEx(filepath.c_str(), nfilepath.c_str(), MOVEFILE_WRITE_THROUGH);
+				eword = GetLastError();
 			}
 		}
 	}
 	else
 	{
-		if (::remove(bbla) != 0) return 3;
+		if (DeleteFile(filepath.c_str()) == 0) return 3;
+		if (GetLastError() != ERROR_SUCCESS) return 3;
 	}
-
+	
 	ofstream owc(filepath, ofstream::binary);
 	if (!owc.is_open()) return 4;
 
@@ -473,6 +848,7 @@ int SaveFile()
 	}
 	owc.close();
 
+	SYSTEMTIME stUTC;
 	if (GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC))
 	{
 		filedate = stUTC;
@@ -485,15 +861,39 @@ int SaveFile()
 void InitMainDialog(HWND hwnd)
 {
 	UnloadFile();
-	if (!ScoopSavegame())
+	ErrorCode err = ScoopSavegame();
+	if (err.id != -1)
 	{
-		MessageBox(hDialog, _T("Could not load savefile!"), _T("Error"), MB_OK | MB_ICONERROR);
+		MessageBox(hDialog, (GLOB_STRS[31] + std::to_wstring(err.info) + GLOB_STRS[err.id]).c_str(), _T("Error"), MB_OK | MB_ICONERROR);
 	}
 	else
 	{
+		SYSTEMTIME stUTC;
+		if (GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC))
+		{
+			filedate = stUTC;
+			filedateinit = TRUE;
+		}
+		else
+		{
+			MessageBox(hDialog, GLOB_STRS[6].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+			filedateinit = FALSE;
+		}
+
+		std::wstring newpath;
+		GetPathToTemp(newpath);
+		newpath += L"\\file.tmp";
+		if (!CopyFileEx(filepath.c_str(), newpath.c_str(), NULL, NULL, FALSE, 0))
+		{
+			TCHAR buffer[128];
+			memset(buffer, 0, 128);
+			swprintf(buffer, 128, GLOB_STRS[37].c_str(), newpath.c_str());
+			MessageBox(hDialog, buffer, Title.c_str(), MB_OK | MB_ICONERROR);
+		}
+
 		TCHAR buffer[128];
 		memset(buffer, 0, 128);
-		swprintf(buffer, 128, _T("%s - [%s]"), Title, filepath.c_str());
+		swprintf(buffer, 128, _T("%s - [%s]"), Title.c_str(), filepath.c_str());
 		SetWindowText(hDialog, (LPCWSTR)buffer);
 
 		LVCOLUMN lvc;
@@ -505,7 +905,7 @@ void InitMainDialog(HWND hwnd)
 		lvc.iSubItem = 0; lvc.pszText = _T(""); lvc.cx = 230; lvc.fmt = LVCFMT_LEFT;
 		SendMessage(GetDlgItem(hwnd, IDC_List), LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
 
-		unsigned int size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
+		UINT size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
 		std::wstring str(size, '\0');
 		GetWindowText(GetDlgItem(hwnd, IDC_FILTER), (LPWSTR)str.data(), size);
 		str.resize(size - 1);
@@ -524,17 +924,30 @@ void InitMainDialog(HWND hwnd)
 		HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
 		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 4), MF_ENABLED);
+		menu = GetSubMenu(GetMenu(hDialog), 1);
+		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 
+		for (UINT i = 0; i < itemTypes.size(); i++)
+		{
+			if (EntryExists(itemTypes[i].GetID()) >= 0)
+			{
+				MENUITEMINFO info = { sizeof(MENUITEMINFO) };
+				info.fMask = MIIM_STATE;
+				info.fState = MFS_ENABLED;
+				SetMenuItemInfo(menu, 3, TRUE, &info);
+				break;
+			}
+		}
 		memset(buffer, 0, 128);
 		swprintf(buffer, 128, GLOB_STRS[11].c_str(), 0);
 		SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)buffer);
 	}
 }
 
-inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<unsigned int> &boltlist, const unsigned int &tightness)
+inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<UINT> &boltlist, const UINT &tightness)
 {
-	unsigned int boltstate = 0;
-	for (unsigned int k = 0; k < boltlist.size(); k++)
+	UINT boltstate = 0;
+	for (UINT k = 0; k < boltlist.size(); k++)
 	{
 		boltstate += boltlist[k];
 	}
@@ -551,7 +964,7 @@ inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<unsigned int> 
 	return FALSE;
 }
 
-void PopulateBList(HWND hwnd, const CarPart *part, unsigned int &item, Overview *ov)
+void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov)
 {
 	HWND hList3 = GetDlgItem(hwnd, IDC_BLIST);
 
@@ -561,12 +974,12 @@ void PopulateBList(HWND hwnd, const CarPart *part, unsigned int &item, Overview 
 
 	if (part->iBolts != UINT_MAX && part->iTightness != UINT_MAX)
 	{
-		unsigned int bolts = 0, maxbolts = 0;
-		std::vector<unsigned int> boltlist;
+		UINT bolts = 0, maxbolts = 0;
+		std::vector<UINT> boltlist;
 
 		if (BinToBolts(variables[part->iBolts].value, bolts, maxbolts, boltlist))
 		{
-			unsigned int tightness = static_cast<unsigned int>(BinToFloat(variables[part->iTightness].value));
+			UINT tightness = static_cast<UINT>(BinToFloat(variables[part->iTightness].value));
 			TCHAR buffer[32];
 			memset(buffer, 0, 32);
 			swprintf(buffer, 32, _T("%d / %d"), bolts, maxbolts);
@@ -592,7 +1005,7 @@ void PopulateBList(HWND hwnd, const CarPart *part, unsigned int &item, Overview 
 
 			if (!partSCs.empty())
 			{
-				for (unsigned int j = 0; j < partSCs.size(); j++)
+				for (UINT j = 0; j < partSCs.size(); j++)
 				{
 					if (partSCs[j].id == 0)
 					{
@@ -652,13 +1065,13 @@ void PopulateBList(HWND hwnd, const CarPart *part, unsigned int &item, Overview 
 
 void UpdateBDialog()
 {
-	unsigned int item = 0;
+	UINT item = 0;
 	Overview ov;
 	HWND hList3 = GetDlgItem(hReport, IDC_BLIST);
 	SendMessage(hList3, WM_SETREDRAW, 0, 0);
 	SendMessage(hList3, LVM_DELETEALLITEMS, 0, 0);
 
-	for (unsigned int i = 0; i < carparts.size(); i++)
+	for (UINT i = 0; i < carparts.size(); i++)
 	{
 		PopulateBList(hReport, &carparts[i], item, &ov);
 	}
@@ -678,7 +1091,7 @@ void UpdateBOverview(HWND hwnd, Overview *ov)
 {
 	int statics[] = { IDC_BT1 , IDC_BT2 , IDC_BT3 , IDC_BT4, IDC_BT5, IDC_BT6, IDC_BT7, IDC_BT8 };
 
-	for (unsigned int i = 0; i < 8; i++)
+	for (UINT i = 0; i < 8; i++)
 	{
 		ClearStatic(GetDlgItem(hwnd, statics[i]), hwnd);
 	}
@@ -720,39 +1133,42 @@ void UpdateBOverview(HWND hwnd, Overview *ov)
 void UpdateParent(const int &group)
 {
 	HWND hList = GetDlgItem(hDialog, IDC_List);
-	unsigned int max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	UINT max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
 
-	for (unsigned int i = 0; i < max; i++)
+	LVITEM lvi = GetGroupEntry(group);
+	if (lvi.iItem != -1)
 	{
-		LVITEM lvi;
-		lvi.mask = LVIF_PARAM;
-		lvi.iItem = i;
-		lvi.iSubItem = 0;
-		ListView_GetItem(hList, (LPARAM)&lvi);
+		bool modified = FALSE;
+		UINT index = UINT_MAX;
 
-		if (lvi.lParam >= 10000) lvi.lParam += -10000;
-		if (lvi.lParam == group)
+		for (UINT j = 0; variables[j].group <= (UINT)group; j++)
 		{
-			bool modified = FALSE;
-			for (unsigned int j = 0; j < variables.size(); j++)
+			if (variables[j].group == group)
 			{
-				if (variables[j].group == group && variables[j].modified)
+				if (index == UINT_MAX)
+					index = j;
+				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved())
 				{
 					modified = TRUE;
 					break;
 				}
 			}
-			if (modified) lvi.lParam += 10000;
-
-			ListView_SetItem(hList, (LPARAM)&lvi);
 		}
+		
+		ListParam* listparam = (ListParam*)lvi.lParam;
+
+		listparam->SetFlag(VAR_REMOVED, GroupRemoved(group, index, TRUE));
+		listparam->SetFlag(VAR_MODIFIED, modified);
+		ListView_SetItem(hList, (LPARAM)&lvi);
+		ListView_RedrawItems(hList, lvi.iItem, lvi.iItem);
+		UpdateWindow(hList);
 	}
 }
 
 void UpdateChild(const int &vIndex, std::string &str)
 {
 	variables[vIndex].value = str;
-	for (unsigned int i = 0; i < indextable.size(); i++)
+	for (UINT i = 0; i < indextable.size(); i++)
 	{
 		if (indextable[i].index2 == vIndex)
 		{
@@ -764,6 +1180,33 @@ void UpdateChild(const int &vIndex, std::string &str)
 	}
 }
 
+void UpdateChangeCounter()
+{
+	//count number of changes made to file
+
+	UINT num = 0;
+	for (UINT i = 0; i < variables.size(); i++)
+	{
+		if (variables[i].IsModified() || variables[i].IsAdded() || variables[i].IsRemoved())
+		{
+			num++;
+		}
+	}
+
+	//Enable menues when changes were made
+
+	HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
+	num > 0 ? EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED) : EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
+
+	//Update change counter
+
+	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT3), hDialog);
+	TCHAR buffer[128];
+	memset(buffer, 0, 128);
+	swprintf(buffer, 128, GLOB_STRS[11].c_str(), num);
+	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)buffer);
+}
+
 void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::string &bin)
 {
 	std::string str;
@@ -772,90 +1215,33 @@ void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::stri
 
 	if (variables[vIndex].static_value == str)
 	{
-		variables[vIndex].modified = FALSE;
+		variables[vIndex].SetModified(FALSE);
 		if (variables[vIndex].value != str)
 		{
 			UpdateChild(vIndex, str);
 			UpdateParent(variables[vIndex].group);
-			/*
-			variables[vIndex].value = str;
-			std::wstring out;
-			FormatString(out, str, variables[vIndex].type);
-			ListView_SetItemText(GetDlgItem(hDialog, IDC_List2), lIndex, 0, (LPWSTR)out.c_str());
-
-			HWND hList = GetDlgItem(hDialog, IDC_List);
-
-			int ListIndex = ListView_GetSelectionMark(hList);
-			LVITEM lvi;
-			lvi.mask = LVIF_PARAM;
-			lvi.iItem = ListIndex;
-			ListView_GetItem(hList, (LPARAM)&lvi);
-			if (lvi.lParam >= 10000) lvi.lParam += -10000;
-			ListView_SetItem(hList, (LPARAM)&lvi);
-			//UpdateWindow(hList);
-			//ListView_RedrawItems(hList, ListIndex, ListIndex);
-			*/
+		}
+		else
+		{
+			UpdateChild(vIndex, variables[vIndex].value);
+			UpdateParent(variables[vIndex].group);
 		}
 	}
 	else
 	{
-		variables[vIndex].modified = TRUE;
+		variables[vIndex].SetModified(TRUE);
 
 		UpdateChild(vIndex, str);
 		UpdateParent(variables[vIndex].group);
-		/*
-		variables[vIndex].value = str;
-		std::wstring out;
-		FormatString(out, str, variables[vIndex].type);
-		ListView_SetItemText(GetDlgItem(hDialog, IDC_List2), lIndex, 0, (LPWSTR)out.c_str());
-
-
-
-		int index = ListView_GetSelectionMark(GetDlgItem(hDialog, IDC_List));
-		ListView_RedrawItems(GetDlgItem(hDialog, IDC_List), index, index);
-
-		HWND hList = GetDlgItem(hDialog, IDC_List);
-		int ListIndex = ListView_GetSelectionMark(hList);
-		LVITEM lvi;
-		lvi.mask = LVIF_PARAM;
-		lvi.iItem = ListIndex;
-		ListView_GetItem(hList, (LPARAM)&lvi);
-		if (lvi.lParam <= 10000) lvi.lParam += 10000;
-		ListView_SetItem(hList, (LPARAM)&lvi);
-
-		//UpdateWindow(hList);
-		//ListView_RedrawItems(hList, ListIndex, ListIndex);
-		*/
 	}
 
-	unsigned int num = 0;
-	for (unsigned int i = 0; i < variables.size(); i++)
-	{
-		if (variables[i].modified)
-		{
-			num++;
-		}
-	}
-	HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
-	num > 0 ? EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED) : EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
-	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT3), hDialog);
-	TCHAR buffer[128];
-	memset(buffer, 0, 128);
-	swprintf(buffer, 128, GLOB_STRS[11].c_str(), num);
-	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)buffer);
-
-	SYSTEMTIME stUTC;
-	GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC);
-	if (!DatesMatch(stUTC))
-	{
-		MessageBox(hDialog, GLOB_STRS[17].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
-	}
-
+	UpdateChangeCounter();
 }
 
 void UpdateList(const std::wstring &str)
 {
 	HWND hList = GetDlgItem(hDialog, IDC_List);
+	FreeLPARAMS(hList);
 	SendMessage(hList, WM_SETREDRAW, 0, 0);
 	SendMessage(hList, LVM_DELETEALLITEMS, 0, 0);
 
@@ -864,20 +1250,21 @@ void UpdateList(const std::wstring &str)
 	if (str.size() == 0)
 	{
 		SendMessage(hList, LVM_SETITEMCOUNT, entries.size(), 0);
-		for (unsigned int i = 0; i < entries.size(); i++)
+		for (UINT i = 0; i < entries.size(); i++)
 		{
-			unsigned int param = i;
-			unsigned int j;
+			ListParam *param = new ListParam(0, i);
+			UINT j;
 			for (j = 0; j < variables.size(); j++)
 			{
 				if (variables[j].group == i) break;
 			}
+			param->SetFlag(VAR_REMOVED, GroupRemoved(i, j, true));
 			for (j; j < variables.size(); j++)
 			{
 				if (variables[j].group != i) break;
-				if (variables[j].modified)
+				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved())
 				{
-					param += 10000;
+					param->SetFlag(VAR_MODIFIED, true);
 					break;
 				}
 			}
@@ -888,10 +1275,10 @@ void UpdateList(const std::wstring &str)
 	}
 	else
 	{
-		unsigned int* indizes = new unsigned int[variables.size()];
-		unsigned int index = 0;
+		UINT* indizes = new UINT[variables.size()];
+		UINT index = 0;
 
-		for (unsigned int i = 0; i < variables.size(); i++)
+		for (UINT i = 0; i < variables.size(); i++)
 		{
 			if (ContainsStr(variables[i].key, str))
 			{
@@ -909,20 +1296,21 @@ void UpdateList(const std::wstring &str)
 		}
 		SendMessage(hList, LVM_SETITEMCOUNT, index, 0);
 
-		for (unsigned int i = 0; i < index; i++)
+		for (UINT i = 0; i < index; i++)
 		{
-			unsigned int param = indizes[i];
-			unsigned int j;
+			ListParam *param = new ListParam(0, indizes[i]);
+			UINT j;
 			for (j = 0; j < variables.size(); j++)
 			{
 				if (variables[j].group == indizes[i]) break;
 			}
+			param->SetFlag(VAR_REMOVED, GroupRemoved(indizes[i], j, true));
 			for (j; j < variables.size(); j++)
 			{
 				if (variables[j].group != indizes[i]) break;
-				if (variables[j].modified)
+				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved())
 				{
-					param += 10000;
+					param->SetFlag(VAR_MODIFIED, true);
 					break;
 				}
 			}
@@ -943,6 +1331,23 @@ void UpdateList(const std::wstring &str)
 	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT1), WM_SETTEXT, 0, (LPARAM)buffer);
 }
 
+void FreeLPARAMS(HWND hwnd)
+{
+	UINT size = SendMessage(hwnd, LVM_GETITEMCOUNT, 0, 0);
+	if (size > 1)
+	{
+		for (UINT i = 0; i < size; i++)
+		{
+			LVITEM lvi;
+			lvi.mask = LVIF_PARAM;
+			lvi.iItem = i;
+			lvi.iSubItem = 0;
+			ListView_GetItem(hwnd, (LPARAM)&lvi);
+			delete (ListParam*)lvi.lParam;
+		}
+	}
+}
+
 void ClearStatic(HWND hStatic, HWND hDlg)
 {
 	RECT rekt;
@@ -954,18 +1359,15 @@ void ClearStatic(HWND hStatic, HWND hDlg)
 
 //check if vector is valid
 //0 == valid, 1 == wrong amount of elements, 2 == float NaN, 3 == negative floats , 4 == not 0><1 , 5 not -1><1 , 29 not a valid angle
-unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::string &bin, const bool allownegative, const bool normalized, const bool eulerconvert, const QTRN *oldq, const std::string &oldbin)
+UINT VectorStrToBin(std::wstring &str, const UINT &size, std::string &bin, const bool allownegative, const bool normalized, const bool eulerconvert, const QTRN *oldq, const std::string &oldbin)
 {
 	std::string::size_type found = 0;
 	int *indizes = new int[size + 1]{ -1 };
 	indizes[size] = str.size();
-	unsigned int seperators = 0;
+	UINT seperators = 0;
 
 	//kill shitespaces
-	for (unsigned int i = 0; i <= str.size(); i++)
-	{
-		if (isspace(str[i])) str.erase(i, 1);
-	}
+	KillWhitespaces(str);
 
 	//wrong amount of elements?
 	while (TRUE)
@@ -986,7 +1388,7 @@ unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::st
 	if (seperators != size - 1) return 1;
 
 	//any illegal characters?
-	for (unsigned int i = 0; i != size; i++)
+	for (UINT i = 0; i != size; i++)
 	{
 		if (!IsValidFloatStr(str.substr(indizes[i] + 1, indizes[i + 1] - indizes[i] - 1))) return 2;
 		if (allownegative == 0)
@@ -1019,7 +1421,7 @@ unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::st
 		if (!QuatEqual(&q, oldq))
 		{
 			double list[] = { q.x, q.y, q.z, q.w };
-			for (unsigned int i = 0; i < 4; i++)
+			for (UINT i = 0; i < 4; i++)
 			{
 				std::string element = std::to_string(list[i]);
 				TruncFloatStr(element);
@@ -1036,7 +1438,7 @@ unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::st
 	{
 		//assemble binary
 		std::string element;
-		for (unsigned int i = 0; i != size; i++)
+		for (UINT i = 0; i != size; i++)
 		{
 			element = WStringToString(str.substr(indizes[i] + 1, indizes[i + 1] - indizes[i] - 1));
 			TruncFloatStr(element);
@@ -1047,24 +1449,10 @@ unsigned int VectorStrToBin(std::wstring &str, const unsigned int &size, std::st
 	delete[] indizes;
 	return 0;
 }
-/*
-template <typename TSTRING>
-bool FetchDataFileParameters(const TSTRING &str, std::string::size_type &startStr, std::string::size_type &endStr)
-{
-	startStr = str.find('"');
-	if (startStr == std::string::npos) return FALSE;
-	startStr++;
-	if (startStr >= str.size()) return FALSE;
-
-	endStr = str.substr(startStr).find('"');
-	if (endStr == std::string::npos || endStr == 0) return FALSE;
-	return TRUE;
-}
-*/
 
 void BatchProcessUninstall()
 {
-	for (unsigned int i = 0; i < carparts.size(); i++)
+	for (UINT i = 0; i < carparts.size(); i++)
 	{
 		if (carparts[i].iInstalled != UINT_MAX)
 		{
@@ -1083,12 +1471,12 @@ void BatchProcessUninstall()
 
 		if (carparts[i].iBolts != UINT_MAX)
 		{
-			unsigned int bolts = 0, maxbolts = 0;
-			std::vector<unsigned int> boltlist;
+			UINT bolts = 0, maxbolts = 0;
+			std::vector<UINT> boltlist;
 
 			if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist))
 			{
-				for (unsigned int j = 0; j < boltlist.size(); j++)
+				for (UINT j = 0; j < boltlist.size(); j++)
 				{
 					boltlist[j] = 0;
 				}
@@ -1101,19 +1489,19 @@ void BatchProcessUninstall()
 
 void BatchProcessStuck()
 {
-	for (unsigned int i = 0; i < carparts.size(); i++)
+	for (UINT i = 0; i < carparts.size(); i++)
 	{
 		if ((carparts[i].iBolts != UINT_MAX) && (carparts[i].iTightness != UINT_MAX))
 		{
-			unsigned int bolts = 0, maxbolts = 0;
-			std::vector<unsigned int> boltlist;
+			UINT bolts = 0, maxbolts = 0;
+			std::vector<UINT> boltlist;
 
 			if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist))
 			{
-				unsigned int boltstate = 0;
-				unsigned int tightness = static_cast<unsigned int>(BinToFloat(variables[carparts[i].iTightness].value));
+				UINT boltstate = 0;
+				UINT tightness = static_cast<UINT>(BinToFloat(variables[carparts[i].iTightness].value));
 
-				for (unsigned int j = 0; j < boltlist.size(); j++)
+				for (UINT j = 0; j < boltlist.size(); j++)
 				{
 					boltstate += boltlist[j];
 				}
@@ -1121,7 +1509,7 @@ void BatchProcessStuck()
 				// adjust boltstate for special cases, if there are any
 				if (!partSCs.empty())
 				{
-					for (unsigned int j = 0; j < partSCs.size(); j++)
+					for (UINT j = 0; j < partSCs.size(); j++)
 					{
 						if (partSCs[j].id == 0)
 						{
@@ -1144,7 +1532,7 @@ void BatchProcessStuck()
 
 void BatchProcessDamage(bool all)
 {
-	for (unsigned int i = 0; i < carparts.size(); i++)
+	for (UINT i = 0; i < carparts.size(); i++)
 	{
 		if (carparts[i].iDamaged != UINT_MAX)
 		{
@@ -1164,7 +1552,7 @@ void BatchProcessDamage(bool all)
 
 void BatchProcessBolts(bool fix)
 {
-	for (unsigned int i = 0; i < carparts.size(); i++)
+	for (UINT i = 0; i < carparts.size(); i++)
 	{
 		if (carparts[i].iTightness != UINT_MAX && carparts[i].iBolts != UINT_MAX)
 		{
@@ -1175,16 +1563,16 @@ void BatchProcessBolts(bool fix)
 			}
 			if (invalid || !fix)
 			{
-				unsigned int bolts = 0, maxbolts = 0;
-				std::vector<unsigned int> boltlist;
+				UINT bolts = 0, maxbolts = 0;
+				std::vector<UINT> boltlist;
 
 				if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist))
 				{
 					if (maxbolts != bolts || !fix)
 					{
 						int boltstate = fix ? 8 : 0;
-						std::vector<unsigned int> boltlist;
-						for (unsigned int j = 0; j < maxbolts; j++)
+						std::vector<UINT> boltlist;
+						for (UINT j = 0; j < maxbolts; j++)
 						{
 							boltlist.push_back(boltstate);
 						}
@@ -1193,7 +1581,7 @@ void BatchProcessBolts(bool fix)
 						// adjust tightness for special cases, if there are any
 						if (!partSCs.empty() && fix)
 						{
-							for (unsigned int j = 0; j < partSCs.size(); j++)
+							for (UINT j = 0; j < partSCs.size(); j++)
 							{
 								if (partSCs[j].id == 0)
 								{
@@ -1217,7 +1605,7 @@ void BatchProcessBolts(bool fix)
 	}
 }
 
-bool BinToBolts(const std::string &str, unsigned int &bolts, unsigned int &maxbolts, std::vector<unsigned int> &boltlist)
+bool BinToBolts(const std::string &str, UINT &bolts, UINT &maxbolts, std::vector<UINT> &boltlist)
 {
 	std::string::size_type start = 0, end = 0, offset = 0;
 	bool valid = TRUE;
@@ -1229,7 +1617,7 @@ bool BinToBolts(const std::string &str, unsigned int &bolts, unsigned int &maxbo
 		offset++;
 		if (valid)
 		{
-			unsigned int boltstate = static_cast<unsigned int>(::strtol(str.substr(offset + start, end - start).c_str(), NULL, 10));
+			UINT boltstate = static_cast<UINT>(::strtol(str.substr(offset + start, end - start).c_str(), NULL, 10));
 			boltlist.push_back(boltstate);
 			bolts += (boltstate == 8 ? 1 : 0);
 			maxbolts++;
@@ -1239,13 +1627,13 @@ bool BinToBolts(const std::string &str, unsigned int &bolts, unsigned int &maxbo
 	return (maxbolts != 0) ? TRUE : FALSE;
 }
 
-std::string BoltsToBin(std::vector<unsigned int> &bolts)
+std::string BoltsToBin(std::vector<UINT> &bolts)
 {
 	if (bolts.size() == 0) return "";
 	std::string bin;
 	bin += IntToBin(bolts.size());
 
-	for (unsigned int i = 0; i < bolts.size(); i++)
+	for (UINT i = 0; i < bolts.size(); i++)
 	{
 		std::string s = "int(" + std::to_string(bolts[i]) + ")";
 		char c = char(s.length());
@@ -1255,9 +1643,111 @@ std::string BoltsToBin(std::vector<unsigned int> &bolts)
 	return bin;
 }
 
+//returns -1 when failure, otherwise index of newly added var
+int Variables_add(Variable var)
+{
+	UINT index = 0;
+	UINT group = UINT_MAX;
+	for (index; index < variables.size(); index++)
+	{
+		std::wstring xname = variables[index].key;
+		std::wstring yname = var.key;
+		transform(xname.begin(), xname.end(), xname.begin(), ::tolower);
+		transform(yname.begin(), yname.end(), yname.begin(), ::tolower);
+		if (xname == yname) return -1;
+		if (xname > yname) break;
+	}
+
+	for (UINT i = 0; i < 2; i++)
+	{
+		int n = (index - i);
+		if (n < 0) n = 0;
+		if ((UINT)n >= variables.size()) n = variables.size() - 1;
+		if (ContainsStr(var.key, entries[variables[n].group]))
+			group = variables[n].group;
+	}
+	if (group == UINT_MAX)
+	{
+		if (index == 0)
+			group = 0;
+		else 
+			group = variables[index - 1].group + 1;
+
+		for (UINT i = index; i < variables.size(); i++)
+		{
+			variables[i].group += 1;
+		}
+		entries.insert((entries.begin() + group), var.key);
+	}
+		
+	var.group = group;
+	var.SetAdded(TRUE);
+	variables.insert((variables.begin() + index), var);
+	UpdateChangeCounter();
+	return index;
+}
+
+bool Variables_remove(const UINT &index)
+{
+	if (index < 0 && index >= variables.size())
+		return FALSE;
+
+	UINT group = variables[index].group;
+
+	//remove added entries, but highlight standard ones
+	if (variables[index].IsAdded())
+	{
+		variables.erase(variables.begin() + index);
+
+		//when group is empty
+		bool GroupIsEmpty = true;
+		for (UINT i = 0; i < variables.size(); i++)
+		{
+			if (variables[i].group == group)
+			{
+				GroupIsEmpty = false;
+				break;
+			}
+		}
+		//clean up
+		if (GroupIsEmpty)
+		{
+			for (UINT i = index; i < variables.size(); i++)
+			{
+				variables[i].group += -1;
+			}
+			entries.erase(entries.begin() + group);
+		}
+		UpdateChangeCounter();
+	}
+	else
+	{
+		variables[index].SetRemoved(TRUE);
+		UpdateValue(L"", index, variables[index].value);
+	}
+	return TRUE;
+}
+
+bool GroupRemoved(const UINT &group, const UINT &index, const bool &IsFirst)
+{
+	UINT startindex = index;
+	if (!IsFirst) 
+		startindex = GetGroupStartIndex(group, index);
+	bool removed = TRUE;
+	for (UINT i = startindex; variables[i].group <= group; i++)
+	{
+		if (!variables[i].IsRemoved())
+		{
+			removed = FALSE;
+			break;
+		}
+	}
+	return removed;
+}
+
 bool IsValidFloatStr(const std::wstring &str)
 {
-	for (unsigned int i = 0; i < str.size(); i++)
+	for (UINT i = 0; i < str.size(); i++)
 	{
 		if (!isdigit(str[i]))
 		{
@@ -1303,8 +1793,9 @@ void TruncFloatStr(std::string &str)
 }
 
 //format variables vector value for display
+
 template <typename TSTRING>
-void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &type)
+void FormatString(std::wstring &str, const TSTRING &value, const UINT &type)
 {
 	str = StringToWString(value);
 
@@ -1318,13 +1809,13 @@ void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &t
 	}
 	case ID_BOOL:
 	{
-		(str.c_str())[0] == 0x00 ? str = _T("false") : str = _T("true");
+		str = (str.c_str())[0] == 0x00 ? bools[0] : bools[1];
 		break;
 	}
 	case ID_COLOR:
 	{
 		std::wstring tstr;
-		for (unsigned int i = 0; i < 4; i++)
+		for (UINT i = 0; i < 4; i++)
 		{
 			std::wstring astr;
 			astr = BinToFloatStr(str.substr(0 + (4 * i), 4));
@@ -1338,7 +1829,7 @@ void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &t
 	case ID_TRANSFORM:
 	{
 		std::wstring tstr;
-		for (unsigned int i = 0; i < 3; i++)
+		for (UINT i = 0; i < 3; i++)
 		{
 			std::wstring astr;
 			astr = BinToFloatStr(str.substr(0 + (4 * i), 4));
@@ -1363,7 +1854,7 @@ void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &t
 		else
 		{
 			char fuck[4];
-			for (unsigned int i = 0; i < 4; ++i)
+			for (UINT i = 0; i < 4; ++i)
 				fuck[i] = (char)value[i];
 			int i;
 			i = *((int*)&fuck);
@@ -1379,7 +1870,7 @@ void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &t
 	case ID_INT:
 	{
 		char fuck[4];
-		for (unsigned int i = 0; i < 4; ++i)
+		for (UINT i = 0; i < 4; ++i)
 		{
 			fuck[i] = (char)value[i];
 		}
@@ -1395,7 +1886,7 @@ void FormatString(std::wstring &str, const TSTRING &value, const unsigned int &t
 
 //format string to store in variables vector
 template <typename TSTRING>
-void FormatValue(std::string &str, const TSTRING &value, const unsigned int &type)
+void FormatValue(std::string &str, const TSTRING &value, const UINT &type)
 {
 	str = WStringToString(value);
 
@@ -1409,9 +1900,14 @@ void FormatValue(std::string &str, const TSTRING &value, const unsigned int &typ
 	}
 	case ID_BOOL:
 	{
-		char abool;
-		str[0] == 102 ? abool = char(0) : abool = char(1);
-		str = abool;
+		if (str.size() > 1)
+		{
+			std::string test = WStringToString(bools[0]);
+			str = (str == WStringToString(bools[0]) ? char(0) : char(1));
+		}
+		else if (str.size() == 1)
+			str = (str == "1" ? char(1) : char(0));
+		
 		break;
 	}
 	case ID_INT:
@@ -1496,10 +1992,10 @@ QTRN EulerToQuat(const ANGLES *angles)
 	return q;
 }
 
-std::string ExtractString(const unsigned int start, const unsigned int end, const char* buffer)
+std::string ExtractString(const UINT start, const UINT end, const char* buffer)
 {
 	std::string str;
-	for (unsigned int i = start; i < end; ++i)
+	for (UINT i = start; i < end; ++i)
 	{
 		str += buffer[i];
 	}
@@ -1507,10 +2003,10 @@ std::string ExtractString(const unsigned int start, const unsigned int end, cons
 }
 
 /*
-void ReplaceString(const unsigned int start, std::string &buffer, const std::string &value)
+void ReplaceString(const UINT start, std::string &buffer, const std::string &value)
 {
 std::string str;
-for (unsigned int i = 0; i < value.size(); ++i)
+for (UINT i = 0; i < value.size(); ++i)
 {
 buffer[start + i] = value[i];
 }
@@ -1518,30 +2014,15 @@ buffer[start + i] = value[i];
 */
 
 /*
-template <typename TSTRING>
-std::string WStringToString(const TSTRING &s)
-{
-	std::string wsTmp(s.begin(), s.end());
-	return wsTmp;
-}
-
-template <typename TSTRING>
-std::wstring StringToWString(const TSTRING &s)
-{
-	std::wstring wsTmp(s.begin(), s.end());
-	return wsTmp;
-}
-*/
-/*
 //toggles hexadecimal float representation between little endian and big endian
 
 void StrFlipEndian(std::string &str)
 {
-for (unsigned int j = 0; j < (str.size() / 4); j++)
+for (UINT j = 0; j < (str.size() / 4); j++)
 {
 std::string holdmybeer = str.substr(j * 4, 4);
-unsigned int size = holdmybeer.size();
-for (unsigned int i = 0; i < size; i++)
+UINT size = holdmybeer.size();
+for (UINT i = 0; i < size; i++)
 {
 str[(j * 4) + i] = holdmybeer[size - i - 1];
 }
@@ -1553,7 +2034,7 @@ float BinToFloat(const std::string &str)
 {
 	if (str.size() != 4) return 0;
 	char fuck[4];
-	for (unsigned int i = 0; i < 4; ++i)
+	for (UINT i = 0; i < 4; ++i)
 	{
 		fuck[i] = (char)str[i];
 	}
@@ -1567,7 +2048,7 @@ std::string BinToFloatStr(const std::string &str)
 {
 	if (str.size() != 4) return "0";
 	char fuck[4];
-	for (unsigned int i = 0; i < 4; ++i)
+	for (UINT i = 0; i < 4; ++i)
 	{
 		fuck[i] = (char)str[i];
 	}
@@ -1584,7 +2065,7 @@ std::wstring BinToFloatStr(const std::wstring &str)
 {
 	if (str.size() != 4) return L"0";
 	char fuck[4];
-	for (unsigned int i = 0; i < 4; ++i)
+	for (UINT i = 0; i < 4; ++i)
 	{
 		fuck[i] = (char)str[i];
 	}
@@ -1638,12 +2119,39 @@ std::string IntToBin(int x)
 	return out;
 }
 
+UINT ParseItemID(const std::wstring &str, const UINT sIndex)
+{
+	if (sIndex < str.size())
+	{
+		for (UINT i = sIndex; isdigit(str[i]); ++i)
+		{
+			if (str[i + 1] >= str.size())
+				return static_cast<UINT>(::wcstol(str.substr(sIndex, i - sIndex).c_str(), NULL, 10));
+		}
+	}
+	return UINT_MAX;
+}
+
+bool StartsWithStr(const std::wstring &target, const std::wstring &str)
+{
+	std::wstring tTar = target, tStr = str;
+	transform(tTar.begin(), tTar.end(), tTar.begin(), ::tolower);
+	transform(tStr.begin(), tStr.end(), tStr.begin(), ::tolower);
+
+	for (UINT i = 0; tTar[i] == tStr[i]; ++i)
+	{
+		if (i + 1 >= tStr.size())
+			return TRUE;
+	}
+	return FALSE;
+}
+
 bool ContainsStr(const std::wstring &target, const std::wstring &str)
 {
-	unsigned int strsize = str.size();
-	unsigned int trgsize = target.size();
+	UINT strsize = str.size();
+	UINT trgsize = target.size();
 
-	for (unsigned int i = 0; i < trgsize; ++i)
+	for (UINT i = 0; i < trgsize; ++i)
 	{
 		if (target[i] == str[0])
 		{
@@ -1651,7 +2159,7 @@ bool ContainsStr(const std::wstring &target, const std::wstring &str)
 			else
 			{
 				if (strsize > trgsize - i) return FALSE;
-				for (unsigned int j = 1; j < strsize; ++j)
+				for (UINT j = 1; j < strsize; ++j)
 				{
 					if (i + j >= trgsize) return FALSE;
 					if (target[i + j] == str[j])
@@ -1670,7 +2178,7 @@ bool ContainsStr(const std::wstring &target, const std::wstring &str)
 std::wstring MakeHexString(const std::wstring &str)
 {
 std::string tstr;
-for (unsigned int i = 0; i < str.size(); ++i)
+for (UINT i = 0; i < str.size(); ++i)
 {
 const char ch = static_cast<char>(str[i]);
 tstr.append(&hex[(ch & 0xF0) >> 4], 1);
@@ -1680,35 +2188,7 @@ return StringToWString(tstr);
 }
 */
 
-/*
-std::string FallbackGetValues(unsigned int &index, const char* buffer)
-{
-unsigned int type = static_cast<unsigned int>(buffer[index]);
-std::string value;
-switch (type)
-{
-case HX_FLOAT:
-value = ExtractString(index + 9, index + 13, buffer);
-break;
-case HX_BOOL:
-value = ExtractString(index + 9, index + 10, buffer);
-break;
-case HX_COLOR:
-value = ExtractString(index + 9, index + 25, buffer);
-break;
-case HX_TRANSFORM4:
-case HX_TRANSFORM6:
-case HX_TRANSFORM8:
-value = ExtractString(index + 10, index + 50, buffer);
-break;
-default:
-value = "";
-}
-return value;
-}
-*/
-
-bool ScoopSavegame()
+ErrorCode ScoopSavegame()
 {
 	using namespace std;
 	vector<Entry> indexed_entries;
@@ -1718,20 +2198,20 @@ bool ScoopSavegame()
 
 	if (!iwc.is_open())
 	{
-		return FALSE;
+		return ErrorCode(13);
 	}
 
 	iwc.seekg(0, iwc.end);
-	unsigned int length = static_cast<int>(iwc.tellg());
+	UINT length = static_cast<int>(iwc.tellg());
 	iwc.seekg(0, iwc.beg);
 	char *buffer = new char[length];
 	iwc.read(buffer, length);
 
 	wstring extract;
-	unsigned int eindex = 0;
-	unsigned int skip;
+	UINT eindex = 0;
+	UINT skip;
 
-	for (unsigned int i = 0; i < length;)
+	for (UINT i = 0; i < length;)
 	{
 		skip = 1;
 		int n = static_cast<int>(buffer[i]);
@@ -1757,7 +2237,7 @@ bool ScoopSavegame()
 				}
 			}
 			// further clean up identifier string
-			for (unsigned int k = 0; k < TextTable.size(); k++)
+			for (UINT k = 0; k < TextTable.size(); k++)
 			{
 				pos1 = extract.find(TextTable[k].badstring);
 				while (pos1 != string::npos)
@@ -1768,21 +2248,29 @@ bool ScoopSavegame()
 			}
 
 			//fetch variable length (type + value)
-			unsigned int type = -1;
+			UINT type = -1;
 
 			std::string value;
-			unsigned int val_index = i + 2 + n + 4;
+			UINT val_index = i + 2 + n + 4;
 			int var_len = *((int*)&buffer[i + 2 + n]);
 
-			if (var_len <= 0) return FALSE;
+			if (var_len <= 0)
+			{
+				return ErrorCode(32, i);
+			}
 			skip = 5 + n + var_len;
-			if ((i + skip) > length) return FALSE;
-			if (buffer[i + skip] != HX_ENDENTRY) return FALSE;
-
+			if ((i + skip) > length)
+			{
+				return ErrorCode(33, i);
+			}
+			if (buffer[i + skip] != HX_ENDENTRY)
+			{
+				return ErrorCode(33, i);
+			}
 
 			std::string btype = ExtractString(val_index, val_index + 5, buffer);
 
-			for (unsigned int k = 0; k < 7; k++)
+			for (UINT k = 0; k < 7; k++)
 			{
 				std::string dtype = WStringToString(DATATYPES[k].substr(0, 5));
 				if (btype == dtype)
@@ -1794,36 +2282,34 @@ bool ScoopSavegame()
 				}
 			}
 
-			//unsigned int index = i + 3 + n;
-			//FallbackGetValues(index, buffer);
-
 			value = ExtractString(val_index, val_index + var_len, buffer);
+			std::wstring tag = L"";
 
 			switch (type)
 			{
-			case ID_STRINGL:
-			{
-				int str_len = *((int*)&buffer[val_index + 1]);
+				case ID_STRINGL:
+				{
+					int str_len = *((int*)&buffer[val_index + 1]);
 
-				str_len == 0 ? value = "" : value = value.substr(1);
-				break;
-			}
-			case ID_TRANSFORM:
-				value = value.substr(0, 40);
-				break;
-			case ID_STRING:
-			case ID_BOOL:
-			case ID_FLOAT:
-			case ID_COLOR:
-			case ID_INT:
-				break;
-			default:
-				break;
+					str_len == 0 ? value = "" : value = value.substr(1);
+					break;
+				}
+				case ID_TRANSFORM:
+					//value = value.substr(0, ValIndizes[0][type]);
+					break;
+				case ID_STRING:
+				case ID_BOOL:
+				case ID_FLOAT:
+				case ID_COLOR:
+				case ID_INT:
+					break;
+				default:
+					break;
 			}
 
 			indexed_entries.push_back(Entry(extract, eindex));
 			eindex++;
-			temp_variables.push_back(Variable(value, i + 2 + n, type, extract));
+			temp_variables.push_back(Variable(value, i, type, extract));
 
 			extract.clear();
 		}
@@ -1836,16 +2322,16 @@ bool ScoopSavegame()
 	std::sort(indexed_entries.begin(), indexed_entries.end());
 
 	//sort variable list accordingly
-	for (unsigned int i = 0; i < indexed_entries.size(); i++)
+	for (UINT i = 0; i < indexed_entries.size(); i++)
 	{
-		unsigned int index = indexed_entries[i].index;
+		UINT index = indexed_entries[i].index;
 		variables.push_back(temp_variables[index]);
 	}
 
 	wstring previous_extract;
-	unsigned int group = 0;
+	UINT group = 0;
 
-	for (unsigned int i = 0; i < indexed_entries.size(); i++)
+	for (UINT i = 0; i < indexed_entries.size(); i++)
 	{
 		if (!previous_extract.empty())
 		{
@@ -1863,5 +2349,5 @@ bool ScoopSavegame()
 		}
 		variables[i].group = group;
 	}
-	return entries.empty() ? FALSE : TRUE;
+	return entries.empty() ? ErrorCode(34) : ErrorCode(-1);
 }
