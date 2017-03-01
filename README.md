@@ -6,7 +6,7 @@
 Q: What does it do?
 
 A: It converts binary data to human readable form and back, allowing you to edit your savegames as you please!
-It currently supports the following datatypes: FLOAT, BOOL, STRINGLISTS, INT, STRING, VECTOR3, VECTOR4.  
+It currently supports the following datatypes: FLOAT, BOOL, ARRAY, INT, STRING, VECTOR3, VECTOR4.  
 
 Q: Where do I find my savegames?
 
