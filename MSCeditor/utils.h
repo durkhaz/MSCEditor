@@ -99,6 +99,7 @@ int SaveFile();
 void UnloadFile();
 bool CanClose();
 inline bool WasModified();
+bool SaveSettings(const std::wstring &savefilename);
 void ClearStatic(HWND hStatic, HWND hDlg);
 void FreeLPARAMS(HWND hwnd);
 BOOL LoadDataFile(const std::wstring &datafilename);

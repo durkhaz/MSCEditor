@@ -2,6 +2,7 @@
 
 #include <CommCtrl.h>
 #define        WM_L2CONTEXTMENU     (WM_USER + 10)
+#define        WM_DRAWINFOICON     (WM_USER + 11)
 
 // ======================
 // dlg utils
@@ -65,6 +66,53 @@ BOOL CALLBACK AboutProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	}
 	default:
 		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL CALLBACK HelpProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+{
+	switch (Message)
+	{
+		case WM_INITDIALOG:
+		{
+			if (first_startup)
+				SendMessage(GetDlgItem(hwnd, IDC_HELPNEW), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[42].c_str());
+			
+			PostMessage(hwnd, WM_DRAWINFOICON, 0, 0);
+			MessageBeep(MB_ICONASTERISK);
+			first_startup = FALSE;
+			break;
+		}
+		case WM_COMMAND:
+		{
+			switch (LOWORD(wParam))
+			{
+				case IDOK:
+					EndDialog(hwnd, 0);
+					DestroyWindow(hwnd);
+					break;
+
+				case IDC_FEEDBACK:
+				{
+					ShellExecute(NULL, _T("open"), _T("http://steamcommunity.com/sharedfiles/filedetails/?id=912990655"), NULL, NULL, SW_SHOWDEFAULT);
+					break;
+				}
+			}
+		}
+		case WM_DRAWINFOICON:
+		{
+			HDC hdc = GetDC(hwnd);
+
+			HICON hIcon = LoadIcon(NULL, IDI_INFORMATION);
+			if (hIcon != NULL)
+			{
+				DrawIconEx(hdc, 105, 10, hIcon, 32, 32, 0, NULL, DI_NORMAL);
+			}
+			break;
+		}
+		default:
+			return FALSE;
 	}
 	return TRUE;
 }
@@ -789,7 +837,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 			for (UINT i = 0; i < itemTypes.size(); i++)
 			{
 				if (EntryExists(itemTypes[i].GetID()) >= 0)
-					SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetName()).c_str());
+					SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetDisplayName()).c_str());
 			}
 
 			for (UINT i = 0; i < locations.size(); i++)
@@ -890,7 +938,10 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 						{
 							std::string bin;
 							UINT type = itemAttributes[(UINT)attributes[j]].GetType();
-							FormatValue(bin, std::to_string(itemAttributes[(UINT)attributes[j]].GetMax()), type);
+							std::string max = std::to_string(itemAttributes[(UINT)attributes[j]].GetMax());
+							TruncFloatStr(max);
+							FormatValue(bin, max, type);
+							
 							Variables_add(Variable(bin, UINT_MAX, type, keyprefix + StringToWString(itemAttributes[(UINT)attributes[j]].GetName())));
 						}
 

@@ -20,14 +20,17 @@ std::wstring filename;
 SYSTEMTIME filedate;
 HFONT hFont;
 
-bool filedateinit = false, MakeBackup = true, EulerAngles = false;
+bool filedateinit = false, MakeBackup = true, EulerAngles = false, CheckForUpdate = true, backup_change_notified = false, first_startup = true;
+const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup" };
+
 PVOID pResizeState = NULL;
 
 const double kindasmall = 1.0e-6;
 const double pi = std::atan(1) * 4;
-const std::wstring Version = L"1.03";
+const std::wstring Version = L"1.04";
 const std::wstring bools[2] = { L"false", L"true" };
 const std::wstring Title = L"MSCeditor " + Version;
+const std::wstring IniFile = L"msce.ini";
 //const KNOWNFOLDERID FOLDERID_LocalAppDataLow = { 0xA520A1A4, 0x1780, 0x4FF6,{ 0xBD, 0x18, 0x16, 0x73, 0x43, 0xC5, 0xAF, 0x16 } };
 
 const std::wstring GLOB_STRS[] =
@@ -58,7 +61,7 @@ const std::wstring GLOB_STRS[] =
 	_T("Loose Parts: %d"), //23
 	_T("Damaged Parts: %d"), //24
 	_T("Stuck Parts: %d"), //25
-	_T("Could not load identifiers. Make sure data.txt is in the same folder as executable."), //26
+	_T("Could not load identifiers. Make sure") + IniFile + _T("is in the same folder as executable."), //26
 	_T("Rotation Quaternions (x , y , z , w)"), //27
 	_T("Rotation Angles (Yaw , Pitch , Roll)"), //28
 	_T("Input contains invalid angles"), //29
@@ -67,10 +70,14 @@ const std::wstring GLOB_STRS[] =
 	_T("\nExpected integer, but got nothing!"), //32
 	_T("\nUnexpected end of entry. Expected symbol: ") + std::wstring(1, HX_ENDENTRY), //33    
 	_T("\nNo entries!"), //34
-	_T("Could not locate file \"data.txt\"!\nStarting program with reduced functionality."), //35
+	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality."), //35
 	_T("Update available! Update now?\n(Will start download in browser)\n\nChangelog:\n"), //36
 	_T("Could not write temporary backup at path:\n\"%s\"\nPlease report this issue."), //37
-	_T("Could not locate temporary file to restore. Reloading instead!") //38
+	_T("Could not locate temporary file to restore. Reloading instead!"), //38
+	_T("File could not be reloaded because it was renamed or deleted!"), //39
+	_T("Successfully wrote dumpfile!"), //40
+	_T("Just a heads up, but as of version 1.04,\nsettings no longer reset on launch!\nKeep that in mind."), //41
+	_T("Hey buddy! Looks like you're new.") //42
 };
 
 const std::wstring TypeStrs[] =

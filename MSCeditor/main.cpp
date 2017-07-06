@@ -50,28 +50,43 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 			SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 
-			//load data.txt
-			if (LoadDataFile(L"data.txt"))
+			//load inifile
+			if (LoadDataFile(IniFile))
 				MessageBox(hwnd, GLOB_STRS[35].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+			else
+				if (first_startup)
+				{
+					HWND hHelp = CreateDialog(hInst, MAKEINTRESOURCE(IDD_HELP), hDialog, HelpProc);
+					ShowWindow(hHelp, SW_SHOW);
+				}
 
 			//check updates
-			std::wstring path; 
-			if (!DownloadUpdatefile(L"http://mscedit.superskalar.org/current", path))
+			if (CheckForUpdate)
 			{
-				std::wstring link, changelog;
-				if (CheckUpdate(path, link, changelog))
+				std::wstring path;
+				if (!DownloadUpdatefile(L"http://mscedit.superskalar.org/current", path))
 				{
-					switch (MessageBox(NULL, (GLOB_STRS[36] + changelog).c_str(), Title.c_str(), MB_YESNO | MB_ICONINFORMATION))
+					std::wstring link, changelog;
+					if (CheckUpdate(path, link, changelog))
 					{
+						switch (MessageBox(NULL, (GLOB_STRS[36] + changelog).c_str(), Title.c_str(), MB_YESNO | MB_ICONINFORMATION))
+						{
 						case IDYES:
 							ShellExecute(NULL, _T("open"), link.c_str(), NULL, NULL, SW_SHOWDEFAULT);
 							EndDialog(hDialog, 0);
 							break;
 						default:
 							break;
+						}
 					}
 				}
 			}
+		
+			//apply settings
+			if (!MakeBackup)
+				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
+			if (!CheckForUpdate)
+				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED);
 
 			break;
 		}
@@ -193,7 +208,11 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					if (CanClose()) OpenFileDialog();
 					break;
 				case ID_FILE_EXIT:
-					if (CanClose()) EndDialog(hDialog, 0);
+					if (CanClose())
+					{
+						SaveSettings(IniFile);
+						EndDialog(hDialog, 0);
+					}
 					break;
 				case ID_FILE_CLOSE:
 					if (CanClose()) UnloadFile();
@@ -258,12 +277,28 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 				case ID_OPTIONS_MAKEBACKUP:
 				{
-					MakeBackup = (MF_CHECKED == (MakeBackup ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_CHECKED)) ? FALSE : TRUE);
+					if (MakeBackup)
+					{
+						CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
+						if (!backup_change_notified)
+						{
+							MessageBox(hDialog, GLOB_STRS[41].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+							backup_change_notified = TRUE;
+						}
+					}
+					else
+						CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_CHECKED);
+					MakeBackup = !MakeBackup;
 					break;	
+				}
+				case ID_OPTIONS_CHECKFORUPDATES:
+				{
+					CheckForUpdate = (MF_CHECKED == (CheckForUpdate ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED)) ? FALSE : TRUE);
+					break;
 				}
 				case ID_OPTIONS_USEEULERANGLES:
 				{
-					EulerAngles = (MF_CHECKED == (EulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED)) ? FALSE : TRUE);
+					EulerAngles = (MF_CHECKED == (EulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_CHECKED)) ? FALSE : TRUE);
 					break;
 				}
 				case ID_FILE_SAVE:
@@ -281,7 +316,8 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				}
 				case ID__HELP:
 				{
-					MessageBox(hDialog, HelpStr, Title.c_str(), MB_OK | MB_ICONINFORMATION);
+					HWND hHelp = CreateDialog(hInst, MAKEINTRESOURCE(IDD_HELP), hDialog, HelpProc);
+					ShowWindow(hHelp, SW_SHOW);
 					break;
 				}
 				case ID__ABOUT:
@@ -313,12 +349,14 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				case ID_TOOLS_DUMP:
 				{
 					if (variables.size() == 0) break;
-					std::wofstream dump("object_dump.txt", std::wofstream::out, std::wofstream::trunc);
+					std::wofstream dump(L"entry_dump.txt", std::wofstream::out, std::wofstream::trunc);
 					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
 
 					for (UINT i = 0; i < variables.size(); i++)
 					{
-						dump << (L"\"" + variables[i].key + L"\" \"" + variables[i].key + L"\"\n");
+						std::wstring str;
+						FormatString(str, variables[i].value, variables[i].type);
+						dump << (L"\"" + variables[i].key + L"\" \"" + str + L"\"\n");
 					}
 
 					if (dump.bad() || dump.fail())
@@ -327,7 +365,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					}
 					else
 					{
-						MessageBox(hwnd, GLOB_STRS[31].c_str(), Title.c_str(), MB_OK );
+						MessageBox(hwnd, GLOB_STRS[40].c_str(), Title.c_str(), MB_OK );
 					}
 					dump.close();
 					break;
@@ -382,8 +420,11 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 		}
 
 		case WM_CLOSE:
-			if (CanClose()) EndDialog(hDialog, 0);
-
+			if (CanClose())
+			{
+				SaveSettings(IniFile);
+				EndDialog(hDialog, 0);
+			}
 			break;
 
 		default:

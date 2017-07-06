@@ -3,14 +3,24 @@
 #include <fstream> //file stream input output
 #include <algorithm> //sort
 #include <Urlmon.h>
+#undef max
 
 void GetPathToTemp(std::wstring &path)
 {
 	TCHAR buffer[MAX_PATH];
-	
+
 	if (GetTempPath(MAX_PATH, buffer))
 	{
 		path = buffer;
+
+		//remove trailing backslashes just in case
+
+		UINT length = path.size();
+		if (length > 1)
+			for (UINT i = length - 1; path[i] == '\\' ; i--)
+				length--;
+
+		path.resize(length);
 		path += L"\\MSCeditor";
 		CreateDirectory(path.c_str(), NULL);
 	}
@@ -42,7 +52,11 @@ BOOL ParseUpdateData(const std::string &str, std::vector<std::string> &strs)
 
 	while (TRUE)
 	{
-		UINT size = (UINT)str[i];
+		UINT size;
+		if (str[i] < 0)
+			size = 128 - (-128 - str[i]);
+		else
+			size = (UINT)str[i];
 		strs.push_back(str.substr(i + 1, size));
 		i += 1 + size;
 		if ((i + 1) >= str.size())
@@ -67,7 +81,7 @@ BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &change
 	iwc.read(buffer, length);
 	iwc.close();
 	std::string str = buffer;
-	//FlipString(str, L"invert");
+	//FlipString(str, L"invert"); 
 	delete[] buffer;
 	FlipString(str);
 	std::vector<std::string> strs;
@@ -375,8 +389,23 @@ bool FileChanged()
 				
 			}
 			case IDYES:
-				InitMainDialog(hDialog);
+			{
+				//make sure file still exists
+				HANDLE hFile = CreateFileW(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+				if (hFile != INVALID_HANDLE_VALUE)
+				{
+					CloseHandle(hFile);
+					InitMainDialog(hDialog);
+					break;
+				}
+				else
+				{
+					MessageBox(NULL, GLOB_STRS[39].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+					UnloadFile();
+				}
 				break;
+			}
+
 		}
 	}
 	return FALSE;
@@ -484,6 +513,7 @@ void UnloadFile()
 	GetPathToTemp(tmppath);
 	tmppath += L"\\file.tmp";
 	DeleteFile(tmppath.c_str());
+	filedateinit = FALSE;
 
 	SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 	HWND hList1 = GetDlgItem(hDialog, IDC_List);
@@ -607,11 +637,11 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 	{
 		switch (params.size())
 		{
-			case 3:
-				itemTypes.push_back(Item(WStringToString(params[0]), MakeCharArray(std::wstring(params[1])), WStringToString(params[2])));
+			case 4:
+				itemTypes.push_back(Item(params[0], WStringToString(params[1]), MakeCharArray(std::wstring(params[2])), WStringToString(params[3])));
 				break;
-			case 2:
-				itemTypes.push_back(Item(WStringToString(params[0]), MakeCharArray(std::wstring(params[1]))));
+			case 3:
+				itemTypes.push_back(Item(params[0], WStringToString(params[1]), MakeCharArray(std::wstring(params[2]))));
 				break;
 		}
 	}
@@ -624,7 +654,7 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 			if (params.size() == 3)
 				itemAttributes.push_back(ItemAttribute(s, c));
 			else if (params.size() == 5)
-				itemAttributes.push_back(ItemAttribute(s, c, static_cast<int>(::wcstol(params[3].c_str(), NULL, 10)), static_cast<int>(::wcstol(params[4].c_str(), NULL, 10))));
+				itemAttributes.push_back(ItemAttribute(s, c, static_cast<double>(::wcstod(params[3].c_str(), NULL)), static_cast<double>(::wcstod(params[4].c_str(), NULL))));
 		}
 	}
 	else if (identifier == L"Report_Identifiers")
@@ -642,7 +672,20 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 			partSCs.push_back(SC(params[0], static_cast<int>(::strtol(WStringToString(params[1]).c_str(), NULL, 10)), param));
 		}
 	}
-
+	else if (identifier == L"Settings")
+	{
+		if (params.size() >= 2)
+		{
+			if (params[0] == settings[0])
+				MakeBackup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+			else if (params[0] == settings[1])
+				backup_change_notified = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+			else if (params[0] == settings[2])
+				CheckForUpdate = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+			else if (params[0] == settings[3])
+				first_startup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+		}
+	}
 }
 
 BOOL LoadDataFile(const std::wstring &datafilename)
@@ -711,6 +754,124 @@ BOOL LoadDataFile(const std::wstring &datafilename)
 	return 0;
 }
 
+void StrGetLine(const std::wstring &target, std::wstring &str, UINT &offset, bool truncEOL = FALSE)
+{
+	UINT i = offset, j = 0;
+	for (i; i < target.size(); i++)
+	{
+		if (target[i] == '\n' || target[i] == '\r')
+		{
+			if (i + 1 < target.size())
+				if (target[i + 1] == '\n' || target[i + 1] == '\r')
+					truncEOL ? j = 2 : i += 2;
+				else
+					truncEOL ? j = 1 : i += 1;
+			break;
+		}
+	}
+	i = i - offset;
+	str = target.substr(offset, i);
+	offset += (i + j);
+}
+
+template <typename TSTRING>
+void TruncTailingNulls(const TSTRING &str)
+{
+	UINT i = str->size() - 1;
+	for (i; str->at(i) == '\0'; i--);
+	str->resize(i + 1);
+}
+
+//very ugly but idc
+
+bool SaveSettings(const std::wstring &savefilename)
+{
+	using namespace std;
+
+	wifstream inf(savefilename);
+	if (!inf.is_open()) return FALSE;
+
+	inf.seekg(0, inf.end);
+	UINT length = static_cast<int>(inf.tellg());
+	inf.seekg(0, inf.beg);
+	wstring buffer(length + 1, '\0');
+	inf.read((wchar_t*)buffer.data(), length);
+
+	if (buffer.empty())
+		return FALSE;
+
+	inf.close();
+
+	std::wstring strInput;
+	UINT offset = 0, start = UINT_MAX;
+
+	while (offset < buffer.size())
+	{
+		StrGetLine(buffer, strInput, offset);
+		if (ContainsStr(strInput, L"#\"Settings\""))
+		{
+			start = offset;
+			break;
+		}
+
+	}
+
+	//first we clear the settings block
+
+	while (offset < buffer.size())
+	{
+		StrGetLine(buffer, strInput, offset);
+
+		for (UINT i = 0; i < strInput.size(); i++)
+		{
+			if (strInput[i] == '/')
+				if (i + 1 < strInput.size())
+					if (strInput[i + 1] == '/')
+						break;
+
+			if (strInput[i] == '#')
+			{
+				offset = UINT_MAX;
+				break;
+			}
+
+			if (strInput[i] == '"')
+			{
+				buffer.replace(offset - strInput.size(), strInput.size(), L"");
+				offset = offset - strInput.size();
+				break;
+			}
+		}
+	}
+	
+	//then we insert the settings
+
+	std::wstring setting;
+
+	setting += L'\"' + settings[0] + L"\" \"" + std::to_wstring(MakeBackup == 1) + L"\"\n";
+	setting += L'\"' + settings[1] + L"\" \"" + std::to_wstring(backup_change_notified == 1) + L"\"\n";
+	setting += L'\"' + settings[2] + L"\" \"" + std::to_wstring(CheckForUpdate == 1) + L"\"\n";
+	setting += L'\"' + settings[3] + L"\" \"" + std::to_wstring(first_startup == 1) + L"\"\n";
+	buffer.insert(start, setting);
+
+	//write to disk
+
+	TruncTailingNulls(&buffer);
+
+	wofstream owc(savefilename, wofstream::trunc);
+	if (!owc.is_open()) return FALSE;
+
+	owc.write(buffer.c_str(), buffer.size());
+	if (owc.bad() || owc.fail())
+	{
+		owc.close();
+		return FALSE;
+	}
+	owc.close();
+
+	return TRUE;
+}
+
 inline bool WasModified()
 {
 	for (UINT i = 0; i < variables.size(); i++)
@@ -721,13 +882,6 @@ inline bool WasModified()
 		}
 	}
 	return FALSE;
-}
-
-void TruncTailingNulls(std::string *str)
-{
-	UINT i = str->size() - 1;
-	for (i; str->at(i) == '\0'; i--);
-	str->resize(i + 1);
 }
 
 int SaveFile()
@@ -889,6 +1043,8 @@ void InitMainDialog(HWND hwnd)
 			memset(buffer, 0, 128);
 			swprintf(buffer, 128, GLOB_STRS[37].c_str(), newpath.c_str());
 			MessageBox(hDialog, buffer, Title.c_str(), MB_OK | MB_ICONERROR);
+			EndDialog(hDialog, 0);
+			return;
 		}
 
 		TCHAR buffer[128];
@@ -2285,26 +2441,10 @@ ErrorCode ScoopSavegame()
 			value = ExtractString(val_index, val_index + var_len, buffer);
 			std::wstring tag = L"";
 
-			switch (type)
+			if (type == ID_STRINGL)
 			{
-				case ID_STRINGL:
-				{
-					int str_len = *((int*)&buffer[val_index + 1]);
-
-					str_len == 0 ? value = "" : value = value.substr(1);
-					break;
-				}
-				case ID_TRANSFORM:
-					//value = value.substr(0, ValIndizes[0][type]);
-					break;
-				case ID_STRING:
-				case ID_BOOL:
-				case ID_FLOAT:
-				case ID_COLOR:
-				case ID_INT:
-					break;
-				default:
-					break;
+				int str_len = *((int*)&buffer[val_index + 1]);
+				str_len == 0 ? value = "" : value = value.substr(1);
 			}
 
 			indexed_entries.push_back(Entry(extract, eindex));

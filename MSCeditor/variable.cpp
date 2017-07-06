@@ -68,13 +68,14 @@ void Variable::SetRemoved(bool b)
 	b ? flags |= VAR_REMOVED : flags &= ~VAR_REMOVED;
 }
 
-Item::Item(std::string name, std::vector<char> attributes, std::string id)
-	: m_name(std::move(name))
+Item::Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string id)
+	: m_name(std::move(name)), m_displayname(std::move(displayname))
 {
 	if (id.empty())
 		m_ID = m_name + "ID";
 	else
 		m_ID = std::move(id);
+
 	for (UINT i = 0; i < attributes.size(); i++)
 	{
 		SetFlag(static_cast<int>(pow( 2.0 , (int)(attributes[i]) - 1)), TRUE);

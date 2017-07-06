@@ -58,14 +58,16 @@ class Variable : public BitMask
 class Item : public BitMask
 {
 	private:
+	std::wstring m_displayname;
 	std::string m_name;
 	std::string m_ID;
 
 	public:
-	Item(std::string name, std::vector<char> attributes, std::string id = "");
+	Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string id = "");
 
 	std::vector<char> GetAttributes(const UINT size);
 	std::string GetName() { return m_name; }
+	std::wstring GetDisplayName() { return m_displayname; }
 	std::string GetID() { return m_ID; }
 };
 
@@ -74,17 +76,17 @@ class ItemAttribute
 	private:
 	std::string m_name;
 	char m_type;
-	int m_min;
-	int m_max;
+	double m_min;
+	double m_max;
 
 	public:
-	ItemAttribute(std::string name, char type, int min = INT_MAX, int max = INT_MAX)
+	ItemAttribute(std::string name, char type, double min = DBL_MAX, double max = DBL_MAX)
 		: m_name(std::move(name)), m_type(std::move(type)), m_min(std::move(min)), m_max(std::move(max))
 	{
 
 	}
 	UINT GetType() { return (UINT)m_type; }
-	int GetMin() { return m_min; }
-	int GetMax() { return m_max; }
+	double GetMin() { return m_min; }
+	double GetMax() { return m_max; }
 	std::string GetName() { return m_name; }
 };
