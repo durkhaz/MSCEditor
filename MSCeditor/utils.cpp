@@ -684,6 +684,8 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 				CheckForUpdate = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 			else if (params[0] == settings[3])
 				first_startup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+			else if (params[0] == settings[4])
+				allow_scale = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 		}
 	}
 }
@@ -2447,9 +2449,13 @@ ErrorCode ScoopSavegame()
 				str_len == 0 ? value = "" : value = value.substr(1);
 			}
 
-			indexed_entries.push_back(Entry(extract, eindex));
-			eindex++;
-			temp_variables.push_back(Variable(value, i, type, extract));
+			//make sure identifier isn't empty, then store
+			if (!extract.empty())
+			{
+				indexed_entries.push_back(Entry(extract, eindex));
+				eindex++;
+				temp_variables.push_back(Variable(value, i, type, extract));
+			}
 
 			extract.clear();
 		}

@@ -20,14 +20,14 @@ std::wstring filename;
 SYSTEMTIME filedate;
 HFONT hFont;
 
-bool filedateinit = false, MakeBackup = true, EulerAngles = false, CheckForUpdate = true, backup_change_notified = false, first_startup = true;
-const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup" };
+bool filedateinit = FALSE, MakeBackup = TRUE, EulerAngles = FALSE, CheckForUpdate = TRUE, backup_change_notified = FALSE, first_startup = TRUE, allow_scale = FALSE;
+const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup", L"allow_scale" };
 
 PVOID pResizeState = NULL;
 
 const double kindasmall = 1.0e-6;
 const double pi = std::atan(1) * 4;
-const std::wstring Version = L"1.04";
+const std::wstring Version = L"1.05";
 const std::wstring bools[2] = { L"false", L"true" };
 const std::wstring Title = L"MSCeditor " + Version;
 const std::wstring IniFile = L"msce.ini";
@@ -120,15 +120,6 @@ const std::wstring BListSymbols[] =
 	{ 0x2713 },
 	_T("?"),
 };
-
-const TCHAR HelpStr[] = _T("Q: What is this?\n\
-A: A savegame editor for the game \"My Summer Car\".\n\
-Q: Where do I find my savegames?\n\
-A: AppData\\LocalLow\\Amistech\\My Summer Car\\\n\
-Q: There's 6 files, which one do I open?\n\
-A: The entries of interest are inside \"defaultES2File\"\n\
-Q: Why do entries show up red?\n\
-A: red = unsaved modified entries. Right click to reset\n");
 
 const std::vector<TextLookup> TextTable =
 {

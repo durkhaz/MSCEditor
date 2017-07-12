@@ -63,7 +63,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			//check updates
 			if (CheckForUpdate)
 			{
-				std::wstring path;
+				std::wstring path; 
 				if (!DownloadUpdatefile(L"http://mscedit.superskalar.org/current", path))
 				{
 					std::wstring link, changelog;

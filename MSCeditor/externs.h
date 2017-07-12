@@ -38,7 +38,7 @@ extern std::wstring filename;
 extern SYSTEMTIME filedate;
 extern HFONT hFont;
 
-extern bool filedateinit, MakeBackup, EulerAngles, CheckForUpdate, backup_change_notified, first_startup;
+extern bool filedateinit, MakeBackup, EulerAngles, CheckForUpdate, backup_change_notified, first_startup, allow_scale;
 
 extern PVOID pResizeState;
 

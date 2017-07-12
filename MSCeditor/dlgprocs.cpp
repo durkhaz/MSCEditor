@@ -530,6 +530,9 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 		}
 		str.resize(str.size() - 2);
 		SendMessage((GetDlgItem(hTransform, IDC_SCA)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
+		//MSC dev requested removal of scale property
+		if (!allow_scale)
+			::EnableWindow(GetDlgItem(hTransform, IDC_SCA), FALSE);
 
 		//tag
 		if (value.size() > 40)
@@ -539,6 +542,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 			SendMessage((GetDlgItem(hTransform, IDC_TAG)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
 			SendMessage((GetDlgItem(hTransform, IDC_TAG)), EM_SETLIMITTEXT, 255, 0);
 		}
+
 		break;
 
 	}
