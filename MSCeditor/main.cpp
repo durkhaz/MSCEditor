@@ -3,7 +3,16 @@
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
 	hInst = hInstance;
+
+	HANDLE G_Mutex = CreateMutex(NULL, FALSE, Title.c_str());
+	if (GetLastError() == ERROR_ALREADY_EXISTS)
+	{
+		MessageBox(NULL, GLOB_STRS[43].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+		return(ERROR_ALREADY_EXISTS);
+	}
+
 	ResizeDialogInitialize(hInst);
+
 	return DialogBox(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc);
 } 
 
@@ -21,7 +30,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 			if (!InitCommonControlsEx(&iccex))
 			{
-				MessageBox(hwnd, _T("Could not initialize common controls!"), _T("Error"), MB_OK | MB_ICONERROR);
+				MessageBox(hwnd, _T("Could not initialize common controls!"), Title.c_str(), MB_OK | MB_ICONERROR);
 				EndDialog(hwnd, 0);
 			}
 

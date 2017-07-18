@@ -27,7 +27,7 @@ PVOID pResizeState = NULL;
 
 const double kindasmall = 1.0e-6;
 const double pi = std::atan(1) * 4;
-const std::wstring Version = L"1.05";
+const std::wstring Version = L"1.06";
 const std::wstring bools[2] = { L"false", L"true" };
 const std::wstring Title = L"MSCeditor " + Version;
 const std::wstring IniFile = L"msce.ini";
@@ -77,7 +77,8 @@ const std::wstring GLOB_STRS[] =
 	_T("File could not be reloaded because it was renamed or deleted!"), //39
 	_T("Successfully wrote dumpfile!"), //40
 	_T("Just a heads up, but as of version 1.04,\nsettings no longer reset on launch!\nKeep that in mind."), //41
-	_T("Hey buddy! Looks like you're new.") //42
+	_T("Hey buddy! Looks like you're new."), //42
+	_T("An instance of MSCeditor is already running.") //43
 };
 
 const std::wstring TypeStrs[] =
@@ -127,6 +128,10 @@ const std::vector<TextLookup> TextTable =
 	TextLookup(_T("_"),_T("")),
 	TextLookup(_T(" "),_T("")),
 	//some special cases EWWW
+
+	TextLookup(_T("stocksteeringwheel"),_T("steeringwheel")),
+	TextLookup(_T("rallywheel"),_T("rallysteeringwheel")),
+	TextLookup(_T("sportwheel"),_T("sportsteeringwheel")),
 
 	TextLookup(_T("playertransform"),_T("player")),
 	TextLookup(_T("motorhoisttransform"),_T("motorhoist")),

@@ -38,6 +38,14 @@ bool CloseEditbox(HWND hwnd)
 	return TRUE;
 }
 
+inline std::wstring GetEditboxString(HWND hEdit)
+{
+	UINT size = GetWindowTextLength(hEdit);
+	std::wstring str(size, '\0');
+	GetWindowText(hEdit, (LPWSTR)str.data(), size + 1);
+	return str;
+}
+
 // ======================
 // dlg procs
 // ======================
@@ -462,7 +470,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 		UINT type = variables[indextable[iItem].index2].type;
 		if (type != ID_TRANSFORM)
 		{
-			//something seriously went wrong here
+			//something went seriously wrong here
 			EndDialog(hwnd, 0);
 			DestroyWindow(hwnd);
 			EnableWindow(hDialog, TRUE);
@@ -554,24 +562,18 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 			{
 			case IDC_APPLY:
 			{
-				UINT error, size;
+				UINT error;
 				bool valid = TRUE;
 				std::wstring value;
 				std::string bin;
-				HWND hEdit;
+
 				EDITBALLOONTIP ebt;
 				ebt.cbStruct = sizeof(EDITBALLOONTIP);
 				ebt.pszTitle = _T("Error!");
 				ebt.ttiIcon = TTI_ERROR_LARGE;
 
 				//location
-				hEdit = GetDlgItem(hTransform, IDC_LOC);
-				size = GetWindowTextLength(hEdit) + 1;
-				TCHAR *LocEditText = new TCHAR[size];
-				memset(LocEditText, 0, size);
-				GetWindowText(hEdit, (LPWSTR)LocEditText, size);
-				std::wstring lvalue = LocEditText;
-				delete[] LocEditText;
+				std::wstring lvalue = GetEditboxString(GetDlgItem(hTransform, IDC_LOC));
 
 				error = VectorStrToBin(lvalue, 3, bin);
 				if (error > 0)
@@ -582,13 +584,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 				}
 
 				//rotation
-				hEdit = GetDlgItem(hTransform, IDC_ROT);
-				size = GetWindowTextLength(hEdit) + 1;
-				TCHAR *RotEditText = new TCHAR[size];
-				memset(RotEditText, 0, size);
-				GetWindowText(hEdit, (LPWSTR)RotEditText, size);
-				value = RotEditText;
-				delete[] RotEditText;
+				value = GetEditboxString(GetDlgItem(hTransform, IDC_ROT));
 
 				if (!EulerAngles)
 				{
@@ -619,29 +615,26 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 				}
 
 				//scale
-				hEdit = GetDlgItem(hTransform, IDC_SCA);
-				size = GetWindowTextLength(hEdit) + 1;
-				TCHAR *ScaEditText = new TCHAR[size];
-				memset(ScaEditText, 0, size);
-				GetWindowText(hEdit, (LPWSTR)ScaEditText, size);
-				value = ScaEditText;
-				delete[] ScaEditText;
+				value = GetEditboxString(GetDlgItem(hTransform, IDC_SCA));
 
-				error = VectorStrToBin(value, 3, bin);
-				if (error > 0)
+				if (allow_scale)
 				{
-					valid = FALSE;
-					ebt.pszText = GLOB_STRS[error].c_str();
-					SendMessage(GetDlgItem(hTransform, IDC_SCA), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+					error = VectorStrToBin(value, 3, bin);
+					if (error > 0)
+					{
+						valid = FALSE;
+						ebt.pszText = GLOB_STRS[error].c_str();
+						SendMessage(GetDlgItem(hTransform, IDC_SCA), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+					}
 				}
+				else
+					bin += variables[indextable[iItem].index2].value.substr(28, 12);
 
 				if (valid)
 				{
-					UINT size = GetWindowTextLength(GetDlgItem(hwnd, IDC_TAG)) + 1;
-					std::wstring str(size, '\0');
-					GetWindowText(GetDlgItem(hwnd, IDC_TAG), (LPWSTR)str.data(), size);
-					str.resize(size - 1);
-					bin += char(str.size()) + WStringToString(str);
+					value = GetEditboxString(GetDlgItem(hTransform, IDC_TAG));
+
+					bin += char(value.size()) + WStringToString(value);
 
 					UpdateValue(lvalue, indextable[iItem].index2, bin);
 

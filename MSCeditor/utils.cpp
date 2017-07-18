@@ -854,6 +854,7 @@ bool SaveSettings(const std::wstring &savefilename)
 	setting += L'\"' + settings[1] + L"\" \"" + std::to_wstring(backup_change_notified == 1) + L"\"\n";
 	setting += L'\"' + settings[2] + L"\" \"" + std::to_wstring(CheckForUpdate == 1) + L"\"\n";
 	setting += L'\"' + settings[3] + L"\" \"" + std::to_wstring(first_startup == 1) + L"\"\n";
+	setting += L'\"' + settings[4] + L"\" \"" + std::to_wstring(allow_scale == 1) + L"\"\n";
 	buffer.insert(start, setting);
 
 	//write to disk
@@ -1039,6 +1040,17 @@ void InitMainDialog(HWND hwnd)
 		std::wstring newpath;
 		GetPathToTemp(newpath);
 		newpath += L"\\file.tmp";
+
+		if (!DeleteFile(newpath.c_str()))
+		{
+			if (GetLastError() == ERROR_ACCESS_DENIED)
+			{
+				// file is read only
+				SetFileAttributes(newpath.c_str(), FILE_ATTRIBUTE_NORMAL);
+				DeleteFile(newpath.c_str());
+			}
+		}
+
 		if (!CopyFileEx(filepath.c_str(), newpath.c_str(), NULL, NULL, FALSE, 0))
 		{
 			TCHAR buffer[128];
@@ -1048,6 +1060,8 @@ void InitMainDialog(HWND hwnd)
 			EndDialog(hDialog, 0);
 			return;
 		}
+
+		SetFileAttributes(newpath.c_str(), FILE_ATTRIBUTE_TEMPORARY);
 
 		TCHAR buffer[128];
 		memset(buffer, 0, 128);
@@ -1524,7 +1538,7 @@ UINT VectorStrToBin(std::wstring &str, const UINT &size, std::string &bin, const
 	indizes[size] = str.size();
 	UINT seperators = 0;
 
-	//kill shitespaces
+	//kill whitespaces
 	KillWhitespaces(str);
 
 	//wrong amount of elements?
