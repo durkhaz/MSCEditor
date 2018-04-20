@@ -3,14 +3,6 @@
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
 	hInst = hInstance;
-
-	HANDLE G_Mutex = CreateMutex(NULL, FALSE, Title.c_str());
-	if (GetLastError() == ERROR_ALREADY_EXISTS)
-	{
-		MessageBox(NULL, GLOB_STRS[43].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
-		return(ERROR_ALREADY_EXISTS);
-	}
-
 	ResizeDialogInitialize(hInst);
 
 	return DialogBox(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc);
@@ -23,6 +15,39 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	{
 		case WM_INITDIALOG:
 		{
+			#ifdef _DEBUG
+			// Alloc debug console
+			AllocConsole();
+			std::wstring cTitle = Title + _T(" Debug Console");
+			SetConsoleTitle(cTitle.c_str());
+
+			// Get STDOUT handle
+			HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+			int SystemOutput = _open_osfhandle(intptr_t(ConsoleOutput), _O_TEXT);
+			FILE *COutputHandle = _fdopen(SystemOutput, "w");
+
+			// Get STDERR handle
+			HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
+			int SystemError = _open_osfhandle(intptr_t(ConsoleError), _O_TEXT);
+			FILE *CErrorHandle = _fdopen(SystemError, "w");
+
+			// Get STDIN handle
+			HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
+			int SystemInput = _open_osfhandle(intptr_t(ConsoleInput), _O_TEXT);
+			FILE *CInputHandle = _fdopen(SystemInput, "r");
+
+			//make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
+			std::ios::sync_with_stdio(true);
+
+			// Redirect the CRT standard input, output, and error handles to the console
+			freopen_s(&CInputHandle, "CONIN$", "r", stdin);
+			freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
+			freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
+
+			std::wcout << cTitle << _T(" successfully allocated.") << std::endl;
+			#endif
+
+
 			//init common controls
 			INITCOMMONCONTROLSEX iccex;
 			iccex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -63,14 +88,14 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			if (LoadDataFile(IniFile))
 				MessageBox(hwnd, GLOB_STRS[35].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
 			else
-				if (first_startup)
+				if (bFirstStartup)
 				{
 					HWND hHelp = CreateDialog(hInst, MAKEINTRESOURCE(IDD_HELP), hDialog, HelpProc);
 					ShowWindow(hHelp, SW_SHOW);
 				}
 
 			//check updates
-			if (CheckForUpdate)
+			if (bCheckForUpdate)
 			{
 				std::wstring path; 
 				if (!DownloadUpdatefile(L"http://mscedit.superskalar.org/current", path))
@@ -92,9 +117,9 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			}
 		
 			//apply settings
-			if (!MakeBackup)
+			if (!bMakeBackup)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
-			if (!CheckForUpdate)
+			if (!bCheckForUpdate)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED);
 
 			break;
@@ -169,7 +194,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				ListView_GetItem(hList1, (LPARAM)&lvi);
 
 				ListParam* listparam = (ListParam*)lvi.lParam;
-				int group = listparam->GetIndex();
+				UINT group = (UINT)listparam->GetIndex();
 				SendMessage(hList2, LVM_DELETEALLITEMS, 0, 0);
 				indextable.clear();
 				int item = 0;
@@ -286,28 +311,28 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 				case ID_OPTIONS_MAKEBACKUP:
 				{
-					if (MakeBackup)
+					if (bMakeBackup)
 					{
 						CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
-						if (!backup_change_notified)
+						if (!bBackupChangeNotified)
 						{
 							MessageBox(hDialog, GLOB_STRS[41].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
-							backup_change_notified = TRUE;
+							bBackupChangeNotified = TRUE;
 						}
 					}
 					else
 						CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_CHECKED);
-					MakeBackup = !MakeBackup;
+					bMakeBackup = !bMakeBackup;
 					break;	
 				}
 				case ID_OPTIONS_CHECKFORUPDATES:
 				{
-					CheckForUpdate = (MF_CHECKED == (CheckForUpdate ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED)) ? FALSE : TRUE);
+					bCheckForUpdate = (MF_CHECKED == (bCheckForUpdate ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED)) ? FALSE : TRUE);
 					break;
 				}
 				case ID_OPTIONS_USEEULERANGLES:
 				{
-					EulerAngles = (MF_CHECKED == (EulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_CHECKED)) ? FALSE : TRUE);
+					bEulerAngles = (MF_CHECKED == (bEulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_CHECKED)) ? FALSE : TRUE);
 					break;
 				}
 				case ID_FILE_SAVE:
@@ -350,7 +375,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					if (!IsWindow(hReport))
 					{
 						EnableWindow(hDialog, FALSE);
-						hReport = CreateDialog(hInst, MAKEINTRESOURCE(IDD_BOLTS), hDialog, ReportProc);
+						hReport = CreateDialog(hInst, MAKEINTRESOURCE(IDD_REPORT), hDialog, ReportProc);
 						ShowWindow(hReport, SW_SHOW);
 					}
 					break;
@@ -360,6 +385,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					if (variables.size() == 0) break;
 					std::wofstream dump(L"entry_dump.txt", std::wofstream::out, std::wofstream::trunc);
 					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+
 
 					for (UINT i = 0; i < variables.size(); i++)
 					{

@@ -2,12 +2,12 @@
 #include "utils.h"
 #include <cmath>
 
-bool BitMask::GetFlag(int i)
+bool BitMask::GetFlag(ULINT i)
 {
 	return (flags & i) == i;
 }
 
-void BitMask::SetFlag(int i, bool b)
+void BitMask::SetFlag(ULINT i, bool b)
 {
 	b ? flags |= i : flags &= ~i;
 }
@@ -18,7 +18,7 @@ ListParam::ListParam(int flags_, UINT index)
 	flags |= flags_;
 }
 
-UINT ListParam::GetIndex()
+ULINT ListParam::GetIndex()
 {
 	return (flags >> 3);
 }
@@ -68,7 +68,7 @@ void Variable::SetRemoved(bool b)
 	b ? flags |= VAR_REMOVED : flags &= ~VAR_REMOVED;
 }
 
-Item::Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string id)
+Item::Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string layer, std::string id)
 	: m_name(std::move(name)), m_displayname(std::move(displayname))
 {
 	if (id.empty())
@@ -76,9 +76,11 @@ Item::Item(std::wstring displayname, std::string name, std::vector<char> attribu
 	else
 		m_ID = std::move(id);
 
+	m_layer = char(layer.size()) + WStringToString(layer);
+
 	for (UINT i = 0; i < attributes.size(); i++)
 	{
-		SetFlag(static_cast<int>(pow( 2.0 , (int)(attributes[i]) - 1)), TRUE);
+		BitMask::SetFlag(static_cast<ULINT>(pow( 2.0 , (int)(attributes[i]) - 1)), TRUE);
 	}
 }
 
@@ -87,7 +89,7 @@ std::vector<char> Item::GetAttributes(const UINT size)
 	std::vector<char> attributes;
 	for (UINT i = 1; i <= size; i++)
 	{
-		if (GetFlag(static_cast<int>(pow(2.0, i - 1))))
+		if (BitMask::GetFlag(static_cast<ULINT>(pow(2.0, i - 1))))
 		{
 			attributes.push_back((char)i);
 		}

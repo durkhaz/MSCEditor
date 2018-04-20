@@ -2,15 +2,16 @@
 #include <String>
 #include <Vector>
 typedef unsigned int UINT;
+typedef unsigned long long int ULINT;
 
 #define VAR_MODIFIED	0b1
 #define VAR_REMOVED		0b10
 #define VAR_ADDED		0b100
 
-class BitMask //because fuck unions B)
+class BitMask // Maybe refactor with union
 {
 	protected:
-		UINT flags;
+		ULINT flags;
 
 	public:
 		BitMask()
@@ -18,15 +19,15 @@ class BitMask //because fuck unions B)
 		{
 
 		}
-		bool GetFlag(int i);
-		void SetFlag(int i, bool b);
+		bool GetFlag(ULINT i);
+		void SetFlag(ULINT i, bool b);
 };
 
 class ListParam : public BitMask
 {
 	public:
 		ListParam(int flags_, UINT index);
-		UINT GetIndex();
+		ULINT GetIndex();
 		void SetIndex(UINT index);
 };
 
@@ -61,14 +62,16 @@ class Item : public BitMask
 	std::wstring m_displayname;
 	std::string m_name;
 	std::string m_ID;
+	std::string m_layer;
 
 	public:
-	Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string id = "");
+	Item(std::wstring displayname, std::string name, std::vector<char> attributes, std::string layer, std::string id = "");
 
 	std::vector<char> GetAttributes(const UINT size);
 	std::string GetName() { return m_name; }
 	std::wstring GetDisplayName() { return m_displayname; }
 	std::string GetID() { return m_ID; }
+	std::string GetLayer() { return m_layer; }
 };
 
 class ItemAttribute

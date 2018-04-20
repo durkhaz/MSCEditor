@@ -17,4 +17,12 @@
 #include "utils.h"
 #include "resize.h"
 
+#ifdef _DEBUG
+#include <io.h>
+#include <fcntl.h>
+#include <iostream>
+//#include <crtdbg.h>
+//#include <conio.h>
+#endif
+
 BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);

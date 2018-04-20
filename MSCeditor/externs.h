@@ -17,6 +17,7 @@
 #define ID_BOOL			4
 #define ID_COLOR		5
 #define ID_INT			6
+#define ID_VECTOR		7
 
 #define LPARAM_OFFSET	100000
 
@@ -33,12 +34,15 @@ extern std::vector<ItemAttribute> itemAttributes;
 extern std::vector<CarPart> carparts;
 extern std::vector<SC> partSCs;
 extern std::vector<std::wstring> partIdentifiers;
+extern std::vector<CarProperty> carproperties;
 extern std::wstring filepath;
 extern std::wstring filename;
+extern std::wstring tmpfilepath;
+extern HANDLE hTempFile;
 extern SYSTEMTIME filedate;
 extern HFONT hFont;
 
-extern bool filedateinit, MakeBackup, EulerAngles, CheckForUpdate, backup_change_notified, first_startup, allow_scale;
+extern bool bSaveFromTemp, bFiledateinit, bMakeBackup, bEulerAngles, bCheckForUpdate, bBackupChangeNotified, bFirstStartup, bAllowScale, bListProcessed;
 
 extern PVOID pResizeState;
 
@@ -62,7 +66,7 @@ extern const std::wstring TypeStrs[];
 
 extern const std::wstring DATATYPES[];
 
-extern const int ValIndizes[7][2];
+extern const int ValIndizes[8][2];
 
 extern const std::wstring BListSymbols[];
 
@@ -70,5 +74,32 @@ extern const TCHAR HelpStr[];
 
 extern const std::vector<TextLookup> TextTable;
 
-//const KNOWNFOLDERID FOLDERID_LocalAppDataLow = { 0xA520A1A4, 0x1780, 0x4FF6,{ 0xBD, 0x18, 0x16, 0x73, 0x43, 0xC5, 0xAF, 0x16 } };
-//char const hex[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B','C','D','E','F' };
+extern const std::vector<TextLookup> NameTable;
+
+typedef struct {
+	WORD dlgVer;
+	WORD signature;
+	DWORD helpID;
+	DWORD exStyle;
+	DWORD style;
+	WORD cDlgItems;
+	short x;
+	short y;
+	short cx;
+	short cy;
+	// 	sz_Or_Ord menu;
+	// 	sz_Or_Ord windowClass;
+	// 	WCHAR title[titleLen];
+	// 	WORD pointsize;
+	// 	WORD weight;
+	// 	BYTE italic;
+	// 	BYTE charset;
+	// 	WCHAR typeface[stringLen];
+} DLGTEMPLATEEX;
+
+typedef struct tag_dlghdr {
+	HWND hwndTab;       // tab control 
+	HWND hwndDisplay;   // current child dialog box 
+	RECT rcDisplay;     // display rectangle for the tab control 
+	DLGTEMPLATEEX *apRes[2];
+} DLGHDR;

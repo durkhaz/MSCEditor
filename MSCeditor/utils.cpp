@@ -4,25 +4,28 @@
 #include <algorithm> //sort
 #include <Urlmon.h>
 #undef max
+#undef min
 
 void GetPathToTemp(std::wstring &path)
 {
-	TCHAR buffer[MAX_PATH];
+	DWORD dwBufferSize = MAX_PATH;
+	BOOL bSucc = TRUE;
+	path.resize(dwBufferSize);
+	DWORD dwRetVal = GetTempPath(MAX_PATH, &path[0]);
 
-	if (GetTempPath(MAX_PATH, buffer))
+	bSucc = dwRetVal <= dwBufferSize && (dwRetVal);
+	if (bSucc)
 	{
-		path = buffer;
-
-		//remove trailing backslashes just in case
-
-		UINT length = path.size();
-		if (length > 1)
-			for (UINT i = length - 1; path[i] == '\\' ; i--)
-				length--;
-
-		path.resize(length);
+		path.resize(dwRetVal);
 		path += L"\\MSCeditor";
-		CreateDirectory(path.c_str(), NULL);
+		bSucc = CreateDirectory(path.c_str(), NULL);
+		if (!bSucc)
+			bSucc = GetLastError() == ERROR_ALREADY_EXISTS;
+	}
+	if (!bSucc)
+	{
+		path.clear();
+		path = L".";
 	}
 }
 
@@ -65,6 +68,28 @@ BOOL ParseUpdateData(const std::string &str, std::vector<std::string> &strs)
 	return i == str.size();
 }
 
+// true = newer than local version, false = identical
+bool CompareVersion(const std::string &localV, const std::string &remoteV)
+{
+	UINT iMax = std::max(localV.size(), remoteV.size());
+	std::string sl (iMax, '0');
+	sl.replace(0, localV.size(), localV);
+	std::string sr (iMax, '0');
+	sr.replace(0, remoteV.size(), remoteV);
+
+	for (UINT i = 0; i < iMax; i++)
+	{
+		if (isdigit(sl[i]) && isdigit(sr[i]))
+		{
+			int ln = atoi(&sl[i]);
+			int rn = atoi(&sr[i]);
+			if (rn > ln)
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &changelog)
 {
 	using namespace std;
@@ -100,14 +125,14 @@ BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &change
 			}
 			if ((strs[i]) == "version")
 			{
-				double uVer = static_cast<float>(::strtod(strs[i + 1].c_str(), NULL));
-				double fVer = static_cast<float>(::wcstod(Version.c_str(), NULL));
-				if (uVer > fVer)
-					up2date = FALSE;
-
+				up2date = !CompareVersion(WStringToString(Version), strs[i + 1]);
 			}
 		}
 	}
+
+	SetFileAttributes(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+	DeleteFile(file.c_str());
+
 	return (!up2date && !changelog.empty() && !apppath.empty());
 }
 
@@ -157,8 +182,15 @@ int CALLBACK AlphComp(LPARAM lp1, LPARAM lp2, LPARAM sortParam)
 	std::wstring s1(64, '\0');
 	std::wstring s2(64, '\0');
 
-	ListView_GetItemText(GetDlgItem(hReport, IDC_BLIST), lp1, Column, (LPWSTR)s1.c_str(), 64);
-	ListView_GetItemText(GetDlgItem(hReport, IDC_BLIST), lp2, Column, (LPWSTR)s2.c_str(), 64);
+	HWND hwnd;
+	DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hReport, GWL_USERDATA);
+	if (pHdr != nullptr)
+		hwnd = pHdr->hwndDisplay;
+	else
+		return 0;
+
+	ListView_GetItemText(GetDlgItem(hwnd, IDC_BLIST), lp1, Column, (LPWSTR)s1.c_str(), 64);
+	ListView_GetItemText(GetDlgItem(hwnd, IDC_BLIST), lp2, Column, (LPWSTR)s2.c_str(), 64);
 	return Column == 1 ? (Ascending ? CompareBolts(s1, s2) : CompareBolts(s2, s1)) : (Ascending ? CompareStrs(s1, s2) : CompareStrs(s2, s1));
 }
 
@@ -341,7 +373,7 @@ LVITEM GetGroupEntry(const UINT &group)
 
 bool DatesMatch(SYSTEMTIME stUTC)
 {
-	if (filedateinit)
+	if (bFiledateinit)
 	{
 		if (filedate.wMilliseconds != stUTC.wMilliseconds) return FALSE;
 		if (filedate.wSecond != stUTC.wSecond) return FALSE;
@@ -362,35 +394,40 @@ bool FileChanged()
 
 	if (!DatesMatch(stUTC))
 	{
-		TCHAR buffer[256];
-		memset(buffer, 0, 256);
-		swprintf(buffer, 256, GLOB_STRS[17].c_str(), filepath.c_str());
+		TCHAR buffer[512];
+		memset(buffer, 0, 512);
+		swprintf(buffer, 512, GLOB_STRS[17].c_str(), filepath.c_str());
 		switch (MessageBox(NULL, buffer, Title.c_str(), MB_YESNO | MB_ICONWARNING))
 		{
 			case IDNO:
 			{
-				std::wstring tmpPath;
-				GetPathToTemp(tmpPath);
-				tmpPath += L"\\file.tmp";
-
-				HANDLE hFile = CreateFileW(tmpPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-				if (hFile != INVALID_HANDLE_VALUE)
-				{
-					CloseHandle(hFile);
-					DeleteFile(filepath.c_str());
-					CopyFileEx(tmpPath.c_str(), filepath.c_str(), NULL, NULL, FALSE, 0);
-					break;
-				}
+				bool bSucc = TRUE;
+				if (hTempFile == INVALID_HANDLE_VALUE)
+					bSucc = FALSE;
 				else
 				{
+					// Does file exist?
+					DWORD dwRet = GetFileType(hTempFile);
+					if (dwRet == FILE_TYPE_UNKNOWN && GetLastError() != NO_ERROR)
+						bSucc = FALSE;
+					else
+					{
+						bSaveFromTemp = TRUE;
+						filedate = stUTC;
+						break;
+					}
+				}
+			
+				if (!bSucc)
+				{
 					MessageBox(NULL, GLOB_STRS[38].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
-					//leak into IDYES to reload
+					// Leak into IDYES to reload
 				}
 				
 			}
 			case IDYES:
 			{
-				//make sure file still exists
+				// Make sure file still exists
 				HANDLE hFile = CreateFileW(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 				if (hFile != INVALID_HANDLE_VALUE)
 				{
@@ -446,31 +483,6 @@ void OpenFileDialog()
 		free(buffer);
 		buffer = NULL;
 
-		/*
-		IKnownFolderManager *fm;
-		HRESULT hrr = CoCreateInstance(CLSID_KnownFolderManager, NULL, CLSCTX_ALL, IID_PPV_ARGS(&fm));
-		if (SUCCEEDED(hrr))
-		{
-		IKnownFolder *LocalLow = NULL;
-		IShellItem *DefaultFolder = NULL;
-
-		SHCreateItemFromParsingName((PCWSTR)defaultpath.c_str(), nullptr, IID_PPV_ARGS(&DefaultFolder));
-
-		hrr = fm->GetFolder(FOLDERID_LocalAppDataLow, &LocalLow);
-		if (SUCCEEDED(hrr))
-		{
-		hrr = LocalLow->GetShellItem(0, IID_IShellItem, (void**)&DefaultFolder);
-		if (SUCCEEDED(hrr))
-		{
-		pFileOpen->SetFolder(DefaultFolder);
-		DefaultFolder->Release();
-		}
-		LocalLow->Release();
-		}
-		fm->Release();
-		}
-		*/
-
 		if (SUCCEEDED(hr))
 		{
 			// Show the Open dialog box.
@@ -509,11 +521,17 @@ void OpenFileDialog()
 
 void UnloadFile()
 {
-	std::wstring tmppath;
-	GetPathToTemp(tmppath);
-	tmppath += L"\\file.tmp";
-	DeleteFile(tmppath.c_str());
-	filedateinit = FALSE;
+	// Will delete tmpfile once handle is closed
+	if (hTempFile != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(hTempFile);
+		hTempFile = INVALID_HANDLE_VALUE;
+	}
+		
+	tmpfilepath.clear();
+	bFiledateinit = FALSE;
+	bListProcessed = FALSE; // Car property list needs reprocessing when new file is opened
+	bSaveFromTemp = FALSE;
 
 	SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 	HWND hList1 = GetDlgItem(hDialog, IDC_List);
@@ -544,12 +562,17 @@ void UnloadFile()
 	EnableMenuItem(menu, GetMenuItemID(menu, 4), MF_GRAYED);
 
 	menu = GetSubMenu(GetMenu(hDialog), 1);
+	EnableMenuItem(menu, GetMenuItemID(menu, 0), MF_GRAYED);
+	EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
 	EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_GRAYED);
 
 	MENUITEMINFO info = { sizeof(MENUITEMINFO) };
 	info.fMask = MIIM_STATE;
 	info.fState = MFS_GRAYED;
 	SetMenuItemInfo(menu, 3, TRUE, &info);
+
+	for (UINT i = 0; i < carproperties.size(); i++)
+		carproperties[i].index = UINT_MAX;
 }
 
 bool CanClose()
@@ -565,15 +588,16 @@ bool CanClose()
 		case IDNO:
 			return TRUE;
 		case IDYES:
-			if (!SaveFile())
+		{
+			int result = SaveFile();
+			if (result > 0)
 			{
-				MessageBox(hDialog, GLOB_STRS[6].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+				MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), _T("Error"), MB_OK | MB_ICONERROR);
 				return FALSE;
 			}
 			else
-			{
 				return TRUE;
-			}
+		}
 		case IDCANCEL:
 			return FALSE;
 		default:
@@ -637,11 +661,11 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 	{
 		switch (params.size())
 		{
+			case 5:
+				itemTypes.push_back(Item(params[0], WStringToString(params[1]), MakeCharArray(std::wstring(params[2])), WStringToString(params[3]), WStringToString(params[4])));
+				break;
 			case 4:
 				itemTypes.push_back(Item(params[0], WStringToString(params[1]), MakeCharArray(std::wstring(params[2])), WStringToString(params[3])));
-				break;
-			case 3:
-				itemTypes.push_back(Item(params[0], WStringToString(params[1]), MakeCharArray(std::wstring(params[2]))));
 				break;
 		}
 	}
@@ -672,20 +696,31 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 			partSCs.push_back(SC(params[0], static_cast<int>(::strtol(WStringToString(params[1]).c_str(), NULL, 10)), param));
 		}
 	}
+	else if (identifier == L"Report_Maintenance")
+	{
+		if (params.size() == 4)
+		{
+			carproperties.push_back(CarProperty(params[0], params[1], static_cast<float>(::wcstod(params[2].c_str(), NULL)), static_cast<float>(::wcstod(params[3].c_str(), NULL))));
+		}
+		else if (params.size() == 5)
+		{
+			carproperties.push_back(CarProperty(params[0], params[1], static_cast<float>(::wcstod(params[2].c_str(), NULL)), static_cast<float>(::wcstod(params[3].c_str(), NULL)), static_cast<float>(::wcstod(params[4].c_str(), NULL))));
+		}
+	}
 	else if (identifier == L"Settings")
 	{
 		if (params.size() >= 2)
 		{
 			if (params[0] == settings[0])
-				MakeBackup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bMakeBackup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 			else if (params[0] == settings[1])
-				backup_change_notified = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bBackupChangeNotified = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 			else if (params[0] == settings[2])
-				CheckForUpdate = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bCheckForUpdate = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 			else if (params[0] == settings[3])
-				first_startup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bFirstStartup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 			else if (params[0] == settings[4])
-				allow_scale = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bAllowScale = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 		}
 	}
 }
@@ -850,11 +885,11 @@ bool SaveSettings(const std::wstring &savefilename)
 
 	std::wstring setting;
 
-	setting += L'\"' + settings[0] + L"\" \"" + std::to_wstring(MakeBackup == 1) + L"\"\n";
-	setting += L'\"' + settings[1] + L"\" \"" + std::to_wstring(backup_change_notified == 1) + L"\"\n";
-	setting += L'\"' + settings[2] + L"\" \"" + std::to_wstring(CheckForUpdate == 1) + L"\"\n";
-	setting += L'\"' + settings[3] + L"\" \"" + std::to_wstring(first_startup == 1) + L"\"\n";
-	setting += L'\"' + settings[4] + L"\" \"" + std::to_wstring(allow_scale == 1) + L"\"\n";
+	setting += L'\"' + settings[0] + L"\" \"" + std::to_wstring(bMakeBackup == 1) + L"\"\n";
+	setting += L'\"' + settings[1] + L"\" \"" + std::to_wstring(bBackupChangeNotified == 1) + L"\"\n";
+	setting += L'\"' + settings[2] + L"\" \"" + std::to_wstring(bCheckForUpdate == 1) + L"\"\n";
+	setting += L'\"' + settings[3] + L"\" \"" + std::to_wstring(bFirstStartup == 1) + L"\"\n";
+	setting += L'\"' + settings[4] + L"\" \"" + std::to_wstring(bAllowScale == 1) + L"\"\n";
 	buffer.insert(start, setting);
 
 	//write to disk
@@ -893,21 +928,25 @@ int SaveFile()
 
 	FileChanged();
 
-	ifstream iwc(filepath, ifstream::binary);
-	if (!iwc.is_open()) return 1;
-
-	iwc.seekg(0, iwc.end);
-	UINT length = static_cast<int>(iwc.tellg());
-	iwc.seekg(0, iwc.beg);
-	string buffer(length + 1, '\0');
-	iwc.read((char*)buffer.data(), length);
-
-	if (iwc.bad() || iwc.fail())
-	{
-		iwc.close();
+	HANDLE hFile = bSaveFromTemp ? hTempFile : CreateFile(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, NULL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE)
 		return 1;
+
+	LARGE_INTEGER fSize;
+	if (!GetFileSizeEx(hFile, &fSize))
+		return 1;
+
+	int nBytes = (int)fSize.LowPart;
+	DWORD nRead;
+	string buffer(nBytes + 1, '\0');
+	if (!ReadFile(hFile, &buffer[0], nBytes, &nRead, NULL))
+		return 1;
+
+	if (!bSaveFromTemp && hFile != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(hFile);
+		hFile = INVALID_HANDLE_VALUE;
 	}
-	iwc.close();
 
 	TruncTailingNulls(&buffer);
 
@@ -966,13 +1005,49 @@ int SaveFile()
 		}
 	}
 
-	if (MakeBackup)
+	if (bMakeBackup)
 	{
-		wstring nfilepath = filepath;
-		size_t found = nfilepath.find_last_of(_T("."));
+		// We clean up ALL old txt backup files in direction and rename to bak file extension so it looks nicer and avoid double backups
+
+		wstring directory;
+		size_t found = filepath.find_last_of(L"\\");
+		if (found != string::npos && ContainsStr(filepath, L"Amistech"))
+		{
+			directory = filepath.substr(0, found + 1);
+			wstring str = directory + L"*_backup*.txt";
+			WIN32_FIND_DATA FindFileData;
+
+			HANDLE hFind = FindFirstFile(str.c_str(), &FindFileData);
+			if (hFind != INVALID_HANDLE_VALUE)
+			{
+				str = FindFileData.cFileName;
+				str.replace(str.size() - 3, 3, L"bak");
+				std::wstring oldpath = directory + FindFileData.cFileName;
+				std::wstring newpath = directory + str.c_str();
+				if (MoveFile(oldpath.c_str(), newpath.c_str()) != 0)
+				{
+					while (FindNextFile(hFind, &FindFileData))
+					{
+						str = FindFileData.cFileName;
+						str.replace(str.size() - 3, 3, L"bak");
+						oldpath = directory + FindFileData.cFileName;
+						newpath = directory + str.c_str();
+						MoveFile(oldpath.c_str(), newpath.c_str());
+					}
+				}
+				FindClose(hFind);
+			}
+		}
+
+		// First we remove the file extension
+
+		std::wstring nfilepath = filepath;
+		found = nfilepath.find_last_of(_T("."));
 		if (found == string::npos)
 			found = nfilepath.size() - 1;
-		nfilepath = nfilepath.insert(found, _T("_backup01"));
+		nfilepath.resize(found);
+
+		nfilepath += L"_backup01.bak";
 
 		if (MoveFileEx(filepath.c_str(), nfilepath.c_str(), MOVEFILE_WRITE_THROUGH) == 0)
 		{
@@ -1009,7 +1084,7 @@ int SaveFile()
 	if (GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC))
 	{
 		filedate = stUTC;
-		filedateinit = TRUE;
+		bFiledateinit = TRUE;
 	}
 
 	return 0;
@@ -1029,39 +1104,56 @@ void InitMainDialog(HWND hwnd)
 		if (GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC))
 		{
 			filedate = stUTC;
-			filedateinit = TRUE;
+			bFiledateinit = TRUE;
 		}
 		else
 		{
-			MessageBox(hDialog, GLOB_STRS[6].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
-			filedateinit = FALSE;
+			MessageBox(hDialog, GLOB_STRS[6].c_str(), L"Error", MB_OK | MB_ICONERROR);
+			bFiledateinit = FALSE;
 		}
+
+		if (filename.substr(filename.size() - 4) == L".bak")
+			MessageBox(hDialog, GLOB_STRS[44].c_str(), L"Info", MB_OK | MB_ICONQUESTION);
 
 		std::wstring newpath;
 		GetPathToTemp(newpath);
-		newpath += L"\\file.tmp";
 
-		if (!DeleteFile(newpath.c_str()))
+		newpath.resize(MAX_PATH);
+		DWORD dwUID = GetTempFileName(newpath.c_str(), L"TMP", 0, &newpath[0]);
+
+		size_t firstNull = newpath.find_first_of(L'\0');
+		if (firstNull != std::wstring::npos)
+			newpath.resize(firstNull);
+
+		if (!dwUID)
+			newpath += L"\\file.tmp";
+
+		tmpfilepath = newpath;
+
+		// If GetTempFileName failed, we might have to remove "file.tmp"
+		if (!DeleteFile(tmpfilepath.c_str()))
 		{
 			if (GetLastError() == ERROR_ACCESS_DENIED)
 			{
-				// file is read only
-				SetFileAttributes(newpath.c_str(), FILE_ATTRIBUTE_NORMAL);
-				DeleteFile(newpath.c_str());
+				// File is read only
+				SetFileAttributes(tmpfilepath.c_str(), FILE_ATTRIBUTE_NORMAL);
+				DeleteFile(tmpfilepath.c_str());
 			}
 		}
 
-		if (!CopyFileEx(filepath.c_str(), newpath.c_str(), NULL, NULL, FALSE, 0))
+		// Copy file
+		if (!CopyFileEx(filepath.c_str(), tmpfilepath.c_str(), NULL, NULL, FALSE, 0))
 		{
 			TCHAR buffer[128];
 			memset(buffer, 0, 128);
-			swprintf(buffer, 128, GLOB_STRS[37].c_str(), newpath.c_str());
+			swprintf(buffer, 128, GLOB_STRS[37].c_str(), tmpfilepath.c_str());
 			MessageBox(hDialog, buffer, Title.c_str(), MB_OK | MB_ICONERROR);
 			EndDialog(hDialog, 0);
 			return;
 		}
 
-		SetFileAttributes(newpath.c_str(), FILE_ATTRIBUTE_TEMPORARY);
+		// Keep file open and store handle
+		hTempFile = CreateFile(tmpfilepath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
 
 		TCHAR buffer[128];
 		memset(buffer, 0, 128);
@@ -1097,6 +1189,10 @@ void InitMainDialog(HWND hwnd)
 		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 4), MF_ENABLED);
 		menu = GetSubMenu(GetMenu(hDialog), 1);
+		if (locations.size() > 0)
+			EnableMenuItem(menu, GetMenuItemID(menu, 0), MF_ENABLED);
+		if (partIdentifiers.size() > 0)
+			EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 
 		for (UINT i = 0; i < itemTypes.size(); i++)
@@ -1114,6 +1210,60 @@ void InitMainDialog(HWND hwnd)
 		swprintf(buffer, 128, GLOB_STRS[11].c_str(), 0);
 		SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)buffer);
 	}
+}
+
+int GetScrollbarPos(HWND hwnd, int bar, UINT code)
+{
+	SCROLLINFO si = {};
+	si.cbSize = sizeof(SCROLLINFO);
+	si.fMask = SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS;
+	GetScrollInfo(hwnd, bar, &si);
+
+	const int minPos = si.nMin;
+	const int maxPos = si.nMax - (si.nPage - 1);
+
+	int result = -1;
+
+	switch (code)
+	{
+	case SB_LINEUP /*SB_LINELEFT*/:
+		result = std::max(si.nPos - 1, minPos);
+		break;
+
+	case SB_LINEDOWN /*SB_LINERIGHT*/:
+		result = std::min(si.nPos + 1, maxPos);
+		break;
+
+	case SB_PAGEUP /*SB_PAGELEFT*/:
+		result = std::max(si.nPos - (int)si.nPage, minPos);
+		break;
+
+	case SB_PAGEDOWN /*SB_PAGERIGHT*/:
+		result = std::min(si.nPos + (int)si.nPage, maxPos);
+		break;
+
+	case SB_THUMBPOSITION:
+		// do nothing
+		break;
+
+	case SB_THUMBTRACK:
+		result = si.nTrackPos;
+		break;
+
+	case SB_TOP /*SB_LEFT*/:
+		result = minPos;
+		break;
+
+	case SB_BOTTOM /*SB_RIGHT*/:
+		result = maxPos;
+		break;
+
+	case SB_ENDSCROLL:
+		// do nothing
+		break;
+	}
+
+	return result;
 }
 
 inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<UINT> &boltlist, const UINT &tightness)
@@ -1163,7 +1313,7 @@ void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov)
 			bool invalid = (part->iInstalled == UINT_MAX);
 			if (!invalid)
 				invalid = (variables[part->iInstalled].value[0] == 0x01);
-			if (invalid)
+			if (invalid && !(part->iCorner != UINT_MAX && variables[part->iCorner].value.size() == 1))
 			{
 				ov->numLooseBolts += maxbolts - bolts;
 
@@ -1208,7 +1358,7 @@ void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov)
 	bool invalid = (part->iInstalled == UINT_MAX);
 	if (!invalid)
 		invalid = (variables[part->iInstalled].value[0] == 0x01);
-	if (invalid)
+	if (invalid && !(part->iCorner != UINT_MAX && variables[part->iCorner].value.size() == 1))
 		ov->numInstalled++;
 
 
@@ -1227,7 +1377,13 @@ void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov)
 	lvi.iItem = item; lvi.iSubItem = 2; lvi.pszText = (LPWSTR)((part->iDamaged == UINT_MAX) ? BListSymbols[0] : ((variables[part->iDamaged].value[0] == 0x01) ? BListSymbols[1] : BListSymbols[0])).c_str();
 	SendMessage(hList3, LVM_SETITEM, 0, (LPARAM)&lvi);
 
-	lvi.iItem = item; lvi.iSubItem = 3; lvi.pszText = (LPWSTR)((part->iInstalled != UINT_MAX) ? ((variables[part->iInstalled].value[0] == 0x01) ? BListSymbols[1] : BListSymbols[0]) : BListSymbols[2]).c_str();
+	std::wstring installedStr;
+	if (part->iCorner != UINT_MAX)
+		installedStr = variables[part->iCorner].value.size() > 1 ? BListSymbols[1] : BListSymbols[0];
+	else
+		installedStr = part->iInstalled != UINT_MAX ? ((variables[part->iInstalled].value[0] == 0x01) ? BListSymbols[1] : BListSymbols[0]) : BListSymbols[2];
+
+	lvi.iItem = item; lvi.iSubItem = 3; lvi.pszText = (LPWSTR)installedStr.c_str();
 	SendMessage(hList3, LVM_SETITEM, 0, (LPARAM)&lvi);
 
 	lvi.iItem = item; lvi.iSubItem = 4; lvi.pszText = (LPWSTR)stuckStr.c_str();
@@ -1235,17 +1391,17 @@ void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov)
 	item++;
 }
 
-void UpdateBDialog()
+void UpdateBDialog(HWND &hwnd)
 {
 	UINT item = 0;
 	Overview ov;
-	HWND hList3 = GetDlgItem(hReport, IDC_BLIST);
+	HWND hList3 = GetDlgItem(hwnd, IDC_BLIST);
 	SendMessage(hList3, WM_SETREDRAW, 0, 0);
 	SendMessage(hList3, LVM_DELETEALLITEMS, 0, 0);
 
 	for (UINT i = 0; i < carparts.size(); i++)
 	{
-		PopulateBList(hReport, &carparts[i], item, &ov);
+		PopulateBList(hwnd, &carparts[i], item, &ov);
 	}
 
 	SendMessage(hList3, WM_SETREDRAW, 1, 0);
@@ -1256,7 +1412,7 @@ void UpdateBDialog()
 	OnSortHeader(pLVInfo);
 
 	//overview
-	UpdateBOverview(hReport, &ov);
+	UpdateBOverview(hwnd, &ov);
 }
 
 void UpdateBOverview(HWND hwnd, Overview *ov)
@@ -1730,10 +1886,9 @@ void BatchProcessBolts(bool fix)
 		{
 			bool invalid = carparts[i].iInstalled == UINT_MAX;
 			if (!invalid)
-			{
 				invalid = (variables[carparts[i].iInstalled].value[0] == 0x01);
-			}
-			if (invalid || !fix)
+
+			if ((invalid && !(carparts[i].iCorner != UINT_MAX && variables[carparts[i].iCorner].value.size() == 1)) || !fix)
 			{
 				UINT bolts = 0, maxbolts = 0;
 				std::vector<UINT> boltlist;
@@ -1815,7 +1970,8 @@ std::string BoltsToBin(std::vector<UINT> &bolts)
 	return bin;
 }
 
-//returns -1 when failure, otherwise index of newly added var
+// Returns -1 when failure, otherwise index of newly added var
+// Really slow because of vector? Should maybe refactor?
 int Variables_add(Variable var)
 {
 	UINT index = 0;
@@ -1849,7 +2005,7 @@ int Variables_add(Variable var)
 		{
 			variables[i].group += 1;
 		}
-		entries.insert((entries.begin() + group), var.key);
+		entries.insert((entries.begin() + group), var.key); // slow af lol
 	}
 		
 	var.group = group;
@@ -1985,9 +2141,11 @@ void FormatString(std::wstring &str, const TSTRING &value, const UINT &type)
 		break;
 	}
 	case ID_COLOR:
+	case ID_VECTOR:
 	{
+		UINT iMax = type == ID_COLOR ? 4 : 3;
 		std::wstring tstr;
-		for (UINT i = 0; i < 4; i++)
+		for (UINT i = 0; i < iMax; i++)
 		{
 			std::wstring astr;
 			astr = BinToFloatStr(str.substr(0 + (4 * i), 4));
@@ -2419,6 +2577,17 @@ ErrorCode ScoopSavegame()
 				}
 			}
 
+			// replace names
+			for (UINT k = 0; k < NameTable.size(); k++)
+			{
+				pos1 = extract.find(NameTable[k].badstring);
+				if (pos1 != string::npos)
+				{
+					extract.replace(pos1, NameTable[k].badstring.length(), NameTable[k].newstring);
+					break;
+				}
+			}
+
 			//fetch variable length (type + value)
 			UINT type = -1;
 
@@ -2442,7 +2611,7 @@ ErrorCode ScoopSavegame()
 
 			std::string btype = ExtractString(val_index, val_index + 5, buffer);
 
-			for (UINT k = 0; k < 7; k++)
+			for (UINT k = 0; k < 8; k++)
 			{
 				std::string dtype = WStringToString(DATATYPES[k].substr(0, 5));
 				if (btype == dtype)

@@ -109,12 +109,13 @@ int CompareBolts(const std::wstring &str1, const std::wstring &str2);
 void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov);
 void UpdateBOverview(HWND hwnd, Overview *ov);
 void UpdateBListParams(HWND &hList);
-void UpdateBDialog();
+void UpdateBDialog(HWND &hwnd);
 void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::string &bin = "");
 void UpdateList(const std::wstring &str = _T(""));
 template <typename TSTRING> void FormatString(std::wstring &str, const TSTRING &value, const UINT &type);
 template <typename TSTRING> void FormatValue(std::string &str, const TSTRING &value, const UINT &type);
 
+int GetScrollbarPos(HWND hwnd, int bar, UINT code);
 std::string BinToFloatStr(const std::string &str);
 std::wstring BinToFloatStr(const std::wstring &str);
 float BinToFloat(const std::string &str);

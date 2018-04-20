@@ -4,6 +4,7 @@
 #include <tchar.h> 
 #include <algorithm> 
 typedef unsigned int UINT;
+typedef unsigned long long int ULINT;
 
 struct QTRN
 {
@@ -40,6 +41,23 @@ struct CarPart
 	UINT iTightness = UINT_MAX;
 	UINT iBolted = UINT_MAX;
 	UINT iDamaged = UINT_MAX;
+	UINT iCorner = UINT_MAX;
+};
+
+struct CarProperty
+{
+	std::wstring displayname;
+	std::wstring lookupname;
+	float optimum;
+	float worst;
+	float recommended;
+	UINT index;
+
+	CarProperty(std::wstring displayname_, std::wstring lookupname_, float worst_, float optimum_, float recommended_ = std::numeric_limits<float>::quiet_NaN(), UINT index_ = UINT_MAX)
+		: displayname(std::move(displayname_)), lookupname(std::move(lookupname_)), worst(std::move(worst_)), optimum(std::move(optimum_)), recommended(std::move(recommended_)), index(std::move(index_))
+	{
+
+	}
 };
 
 struct IndexLookup
