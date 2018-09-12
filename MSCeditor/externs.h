@@ -42,7 +42,7 @@ extern HANDLE hTempFile;
 extern SYSTEMTIME filedate;
 extern HFONT hFont;
 
-extern bool bSaveFromTemp, bFiledateinit, bMakeBackup, bEulerAngles, bCheckForUpdate, bBackupChangeNotified, bFirstStartup, bAllowScale, bListProcessed;
+extern bool bSaveFromTemp, bFiledateinit, bMakeBackup, bEulerAngles, bCheckForUpdate, bBackupChangeNotified, bFirstStartup, bAllowScale;
 
 extern PVOID pResizeState;
 
@@ -57,6 +57,8 @@ extern const std::wstring Version;
 extern const std::wstring Title;
 
 extern const std::wstring IniFile;
+
+extern const std::wstring ErrorTitle;
 
 extern const std::wstring settings[];
 

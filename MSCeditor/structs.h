@@ -53,6 +53,11 @@ struct CarProperty
 	float recommended;
 	UINT index;
 
+	CarProperty() 
+	{
+	
+	}
+
 	CarProperty(std::wstring displayname_, std::wstring lookupname_, float worst_, float optimum_, float recommended_ = std::numeric_limits<float>::quiet_NaN(), UINT index_ = UINT_MAX)
 		: displayname(std::move(displayname_)), lookupname(std::move(lookupname_)), worst(std::move(worst_)), optimum(std::move(optimum_)), recommended(std::move(recommended_)), index(std::move(index_))
 	{

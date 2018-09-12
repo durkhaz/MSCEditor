@@ -82,7 +82,7 @@ std::wstring StringToWString(const TSTRING &s)
 	return wsTmp;
 }
 
-// forward declares
+// Forward declarations
 
 BOOL DownloadUpdatefile(const std::wstring url, std::wstring &path);
 BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &changelog);
@@ -103,8 +103,10 @@ bool SaveSettings(const std::wstring &savefilename);
 void ClearStatic(HWND hStatic, HWND hDlg);
 void FreeLPARAMS(HWND hwnd);
 BOOL LoadDataFile(const std::wstring &datafilename);
+bool DebugFetchVariablesFromAssets();
 
 int CompareStrs(const std::wstring &str1, const std::wstring &str2);
+BOOL CompareStrsWithWildcard(const std::wstring &StrWithNumber, const std::wstring &StrWithWildcard);
 int CompareBolts(const std::wstring &str1, const std::wstring &str2);
 void PopulateBList(HWND hwnd, const CarPart *part, UINT &item, Overview *ov);
 void UpdateBOverview(HWND hwnd, Overview *ov);
@@ -112,13 +114,12 @@ void UpdateBListParams(HWND &hList);
 void UpdateBDialog(HWND &hwnd);
 void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::string &bin = "");
 void UpdateList(const std::wstring &str = _T(""));
-template <typename TSTRING> void FormatString(std::wstring &str, const TSTRING &value, const UINT &type);
+void FormatString(std::wstring &str, const std::string &value, const UINT &type);
 template <typename TSTRING> void FormatValue(std::string &str, const TSTRING &value, const UINT &type);
 
 int GetScrollbarPos(HWND hwnd, int bar, UINT code);
-std::string BinToFloatStr(const std::string &str);
-std::wstring BinToFloatStr(const std::wstring &str);
-float BinToFloat(const std::string &str);
+std::wstring BinToFloatStr(const std::string &str);
+//std::wstring BinToFloatStr(const std::wstring &str);
 std::string FloatStrToBin(const std::string &str);
 std::string IntStrToBin(const std::string &str);
 std::string IntToBin(int x);
@@ -126,19 +127,23 @@ void BatchProcessStuck();
 void BatchProcessUninstall();
 void BatchProcessBolts(bool fix);
 void BatchProcessDamage(bool all);
+void BatchProcessWiring();
 bool BinToBolts(const std::string &str, UINT &bolts, UINT &maxbolts, std::vector<UINT> &boltlist);
 std::string BoltsToBin(std::vector<UINT> &bolts);
 int Variables_add(Variable var);
 bool Variables_remove(const UINT &index);
 bool GroupRemoved(const UINT &group, const UINT &index = UINT_MAX, const bool &IsFirst = FALSE);
 UINT ParseItemID(const std::wstring &str, const UINT sIndex);
+bool StartsWithStrWildcard(const std::wstring &target, const std::wstring &str);
 bool StartsWithStr(const std::wstring &target, const std::wstring &str);
 bool ContainsStr(const std::wstring &target, const std::wstring &str);
 UINT VectorStrToBin(std::wstring &str, const UINT &size, std::string &bin, const bool allownegative = 1, const bool normalized = 0, const bool eulerconvert = 0, const QTRN *oldq = NULL, const std::string &oldbin = "");
 bool QuatEqual(const QTRN *a, const QTRN *b);
 QTRN EulerToQuat(const ANGLES *angles);
 ANGLES QuatToEuler(const QTRN *q);
+float BinToFloat(const std::string &str);
+std::wstring BinToFloatVector(const std::string &value, int max, int start = 0);
 void TruncFloatStr(std::wstring &str);
 void TruncFloatStr(std::string &str);
 bool IsValidFloatStr(const std::wstring &str);
-ErrorCode ScoopSavegame();
+ErrorCode ParseSavegame();

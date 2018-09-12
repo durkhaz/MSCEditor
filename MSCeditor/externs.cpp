@@ -23,17 +23,18 @@ HANDLE hTempFile = INVALID_HANDLE_VALUE;	// Handle of the tempfile. Invalidated 
 SYSTEMTIME filedate;
 HFONT hFont;
 
-bool bSaveFromTemp = FALSE, bFiledateinit = FALSE, bMakeBackup = TRUE, bEulerAngles = FALSE, bCheckForUpdate = TRUE, bBackupChangeNotified = FALSE, bFirstStartup = TRUE, bAllowScale = FALSE, bListProcessed = FALSE;
+bool bSaveFromTemp = FALSE, bFiledateinit = FALSE, bMakeBackup = TRUE, bEulerAngles = FALSE, bCheckForUpdate = TRUE, bBackupChangeNotified = FALSE, bFirstStartup = TRUE, bAllowScale = FALSE;
 const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup", L"allow_scale" };
 
 PVOID pResizeState = NULL;
 
 const double kindasmall = 1.0e-4;
 const double pi = std::atan(1) * 4;
-const std::wstring Version = L"1.07";
+const std::wstring Version = L"1.08";
 const std::wstring bools[2] = { L"false", L"true" };
-const std::wstring Title = L"MSCeditor " + Version;
+const std::wstring Title = L"MSCEditor " + Version;
 const std::wstring IniFile = L"msce.ini";
+const std::wstring ErrorTitle = L"Perkele!";
 //const KNOWNFOLDERID FOLDERID_LocalAppDataLow = { 0xA520A1A4, 0x1780, 0x4FF6,{ 0xBD, 0x18, 0x16, 0x73, 0x43, 0xC5, 0xAF, 0x16 } };
 
 const std::wstring GLOB_STRS[] =
@@ -73,7 +74,7 @@ const std::wstring GLOB_STRS[] =
 	_T("\nExpected integer, but got nothing!"), //32
 	_T("\nUnexpected end of entry. Expected symbol: ") + std::wstring(1, HX_ENDENTRY), //33    
 	_T("\nNo entries!"), //34
-	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality."), //35
+	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality.\n\n\nPossible solutions:\n\n - Make sure the file is in the same folder as this program.\n - Extract the compressed archive before starting.\n - If file is missing, redownload the program."), //35
 	_T("Update available! Update now?\n(Will start download in browser)\n\nChangelog:\n"), //36
 	_T("Could not write temporary backup at path:\n\"%s\"\nPlease report this issue."), //37
 	_T("Could not locate temporary file to restore. Reloading instead!"), //38
@@ -84,6 +85,7 @@ const std::wstring GLOB_STRS[] =
 	_T("An instance of MSCeditor is already running."), //43
 	_T("You are about to open a backup file. Is this intentional?"), //44
 	_T("\nClick a value to modify, then press set to apply the change or press fix to set it to a recommended value.\n\n\nProgrammers Notes:\nThe values for tuning parts are just my suggestions.\nFor instance, the suggested air/fuel ratio of 14:7 is the stoichiometric mixture that provides the best balance between power and fuel economy. To further decrease fuel consumption, you could make the mixture even leaner. For maximum power, you could set it to something like 13.1. \n\nThe same applies to the spark timing on the distributor. There is no best value for this, as with a racing carburator with N2O, the timing needs to be much higher (~13) than with the twin or stock carburator (~14.8).\n\nThe final gear ratio should be between 3.7 - 4.625. Lower values provide higher top speed but less acceleration.\n\n\nI highly recommend tuning it in the game though, as this is what the game is about ;)\nHave fun!"), //45
+	_T("Could not complete action.\n"), //46
 };
 
 const std::wstring TypeStrs[] =
@@ -142,8 +144,15 @@ const std::vector<TextLookup> NameTable =
 {
 	TextLookup(_T("crankbearing"),_T("mainbearing")),
 	TextLookup(_T("crankwheel"),_T("crankshaftpulley")),
+	TextLookup(_T("cd1transform"),_T("cd1")),
+	TextLookup(_T("coffeecuppos"),_T("coffeecup")),
+	TextLookup(_T("coffeepanpos"),_T("coffeepan")),
+	TextLookup(_T("computerorderpos"),_T("computerorder")),
 	TextLookup(_T("fenderflarerf"),_T("fenderflarerl")),
 	TextLookup(_T("fireextinguisherholder"),_T("extinguisherholder")),
+	TextLookup(_T("fishtraptransform"),_T("fishtrap")),
+	TextLookup(_T("floppy1pos"),_T("floppy1")),
+	TextLookup(_T("floppy2pos"),_T("floppy2")),
 	TextLookup(_T("gaugeclock"),_T("clockgauge")),
 	TextLookup(_T("gaugerpm"),_T("rpmgauge")),
 	TextLookup(_T("kiljubuckettransform"),_T("kiljubucket")),

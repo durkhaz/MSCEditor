@@ -86,7 +86,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 			//load inifile
 			if (LoadDataFile(IniFile))
-				MessageBox(hwnd, GLOB_STRS[35].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+				MessageBox(hwnd, GLOB_STRS[35].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 			else
 				if (bFirstStartup)
 				{
@@ -316,7 +316,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 						CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
 						if (!bBackupChangeNotified)
 						{
-							MessageBox(hDialog, GLOB_STRS[41].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+							MessageBox(hDialog, GLOB_STRS[41].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 							bBackupChangeNotified = TRUE;
 						}
 					}
@@ -340,7 +340,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					int result = SaveFile();
 					if (result > 0)
 					{
-						MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+						MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					}
 					else
 					{
@@ -384,7 +384,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				{
 					if (variables.size() == 0) break;
 					std::wofstream dump(L"entry_dump.txt", std::wofstream::out, std::wofstream::trunc);
-					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 
 
 					for (UINT i = 0; i < variables.size(); i++)
@@ -396,13 +396,16 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 
 					if (dump.bad() || dump.fail())
 					{
-						MessageBox(hwnd, GLOB_STRS[30].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+						MessageBox(hwnd, GLOB_STRS[30].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					}
 					else
 					{
+						//DebugFetchVariablesFromAssets();
 						MessageBox(hwnd, GLOB_STRS[40].c_str(), Title.c_str(), MB_OK );
 					}
 					dump.close();
+
+					
 					break;
 				}
 				case ID_ITEMS_SPAWNITEMS:
@@ -410,6 +413,13 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					EnableWindow(hDialog, FALSE);
 					HWND hSpawnitems = CreateDialog(hInst, MAKEINTRESOURCE(IDD_SPAWNITEM), hDialog, SpawnItemProc);
 					ShowWindow(hSpawnitems, SW_SHOW);
+					break;
+				}
+				case ID_TOOLS_MANAGEKEYS:
+				{
+					EnableWindow(hDialog, FALSE);
+					HWND hWnd = CreateDialog(hInst, MAKEINTRESOURCE(IDD_KEYS), hDialog, KeyManagerProc);
+					ShowWindow(hWnd, SW_SHOW);
 					break;
 				}
 			}

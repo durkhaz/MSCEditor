@@ -40,7 +40,7 @@ inline void ShowBalloontip(HWND hwnd, UINT msgIndex)
 {
 	EDITBALLOONTIP ebt;
 	ebt.cbStruct = sizeof(EDITBALLOONTIP);
-	ebt.pszTitle = _T("Oops!");
+	ebt.pszTitle = ErrorTitle.c_str();
 	ebt.ttiIcon = TTI_ERROR_LARGE;
 	ebt.pszText = GLOB_STRS[msgIndex].c_str();
 	SendMessage(hwnd, EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
@@ -93,7 +93,8 @@ bool GetStateLabelSpecs(const CarProperty *cProp, std::wstring &sLabel, COLORREF
 		// If recommended is defined (not NAN), then we check if it's in range of min max
 		if (cProp->recommended == cProp->recommended)
 		{
-			if (fValue > fMax || fValue < fMin)
+			//if (std::abs(fValue - fMax) > kindasmall)
+			if (fValue > fMax + kindasmall || fValue < fMin - kindasmall)
 			{
 				sLabel += STR_BAD;
 				tColor = CLR_BAD;
@@ -405,6 +406,17 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 		// Draw overview
 		UpdateBOverview(hwnd, &ov);
 
+		// Enable mesh button if file exists
+		::EnableWindow(GetDlgItem(hwnd, IDC_BBUT4), FALSE);
+		std::size_t found = filepath.find_last_of(L"\\");
+		if (found != std::string::npos && ContainsStr(filepath, L"Amistech"))
+		{
+			std::wstring meshsavepath = filepath.substr(0, found + 1) + L"meshsave.txt";
+			WIN32_FIND_DATA FindFileData;
+			HANDLE hFind = FindFirstFile(meshsavepath.c_str(), &FindFileData);
+			if (hFind != INVALID_HANDLE_VALUE)
+				::EnableWindow(GetDlgItem(hwnd, IDC_BBUT4), TRUE);
+		}
 		break;
 	}
 	case WM_COMMAND:
@@ -433,19 +445,26 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			}
 			break;
 		case IDC_BBUT6:
-			// Repair parts
-			if (!carparts.empty())
-			{
-				BatchProcessDamage(FALSE);
-				UpdateBDialog(hwnd);
-			}
-			break;
-		case IDC_BBUT4:
 			// Repair all parts
 			if (!carparts.empty())
 			{
 				BatchProcessDamage(TRUE);
 				UpdateBDialog(hwnd);
+			}
+			break;
+		case IDC_BBUT4:
+			// Repair bodywork
+			if (!carparts.empty())
+			{
+				std::size_t found = filepath.find_last_of(L"\\");
+				if (found != std::string::npos && ContainsStr(filepath, L"Amistech"))
+				{
+					std::wstring meshsavepath = filepath.substr(0, found + 1) + L"meshsave.txt";
+					if (DeleteFile(meshsavepath.c_str()) == 0)
+						MessageBox(hwnd, GLOB_STRS[46].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
+					else
+						::EnableWindow(GetDlgItem(hwnd, IDC_BBUT4), FALSE);
+				}
 			}
 			break;
 		case IDC_BBUT3:
@@ -457,10 +476,11 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			}
 			break;
 		case IDC_BBUT5:
-			// Uninstall all
+			// Install wiring
 			if (!carparts.empty())
 			{
-				BatchProcessUninstall();
+				BatchProcessWiring();
+				//BatchProcessUninstall();
 				UpdateBDialog(hwnd);
 			}
 			break;
@@ -517,11 +537,13 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 {
 	static int s_scrollYdelta = 0;
 	static HBRUSH s_backgroundBrush;
+	static UINT initial_size;
 
 	switch (Message)
 	{
 	case WM_INITDIALOG:
 	{
+		initial_size = carproperties.size();
 		s_backgroundBrush = CreateSolidBrush((COLORREF)GetSysColor(COLOR_WINDOW));
 		ShowScrollBar(hwnd, SB_VERT, FALSE);
 		break;
@@ -714,6 +736,8 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 	}
 	case WM_DESTROY:
 	{
+		if (carproperties.size() > 0 && initial_size > 0)
+			carproperties.resize(initial_size);
 		DeleteObject(s_backgroundBrush);
 		break;
 	}
@@ -749,68 +773,97 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 		if (variables.size() == 0)
 			break;
 
-		// If we haven't processed the property vector yet, do this here. This only happens once per opened file
-		if (!bListProcessed)
+		// Process the carproperty vector
+		UINT initial_size = carproperties.size();
+		for (UINT i = 0; i < variables.size(); i++)
 		{
-			UINT initial_size = carproperties.size();
-			for (UINT i = 0; i < variables.size(); i++)
+			// Here we set indices of elements read in from the datafile for faster lookup later
+			for (UINT j = 0; j < carproperties.size(); j++)
 			{
-				// Here we set indices of elements read in from the datafile for faster lookup later
-				for (UINT j = 0; j < carproperties.size(); j++)
+				// If bool is > 1 then it's a wildcard, which we're not going to assign an index to directly
+				BOOL IdentifiersEqual = CompareStrsWithWildcard(variables[i].key, carproperties[j].lookupname);
+				if (IdentifiersEqual > 0)
 				{
-					if (variables[i].key == carproperties[j].lookupname)
+					bool bRelevant = carparts.empty();
+					if (!bRelevant)
 					{
-						bool bRelevant = carparts.empty();
-						if (!bRelevant)
-							for (UINT k = 0; k < carparts.size(); k++)
-								if (StartsWithStr(carproperties[j].lookupname, carparts[k].name) && carparts[k].iInstalled != UINT_MAX)
-									bRelevant = (variables[carparts[k].iInstalled].value.c_str()[0] != NULL);
-
-						if (bRelevant)
+						for (UINT k = 0; k < carparts.size(); k++)
+						{
+							if (StartsWithStr(variables[i].key, carparts[k].name) && carparts[k].iInstalled != UINT_MAX)
+							{
+								bRelevant = variables[carparts[k].iInstalled].value.c_str()[0];
+								break;
+							}
+						}
+					}
+					if (bRelevant)
+					{
+						if (IdentifiersEqual == 2)
+							carproperties.push_back(CarProperty(carproperties[j].displayname, variables[i].key, carproperties[j].worst, carproperties[j].optimum, carproperties[j].recommended, i));
+						else
 							carproperties[j].index = i;
+					}
+					break;
+				}
+			}
+
+			// Now we add elements that contain wear in their key to the property-list
+			if (ContainsStr(variables[i].key, STR_WEAR) && variables[i].type == ID_FLOAT)
+			{
+				bool bAlreadyExists = FALSE;
+				for (UINT j = 0; j < initial_size; j++)
+				{
+					if (CompareStrsWithWildcard(variables[i].key, carproperties[j].lookupname))
+					{
+						bAlreadyExists = TRUE;
+						break;
+					}
+				}
+				// If we have no defined carparts, we just assume everything is installed and display everything
+				bool bIsInstalled = carparts.empty();
+				for (UINT j = 0; ; j++)
+				{
+					if (j >= carparts.size() || bIsInstalled)
+					{
+						// If we couldn't determine if the related carpart is installed, we just assume it is
+						bIsInstalled = TRUE;
+						break;
+					}
+					if (StartsWithStr(variables[i].key, carparts[j].name))
+					{
+						// If the part has installed key, and is installed, we consider it as installed
+						if (bIsInstalled = carparts[j].iInstalled != UINT_MAX && variables[carparts[j].iInstalled].value.c_str()[0])
+							break;
+
+						// If the wheel has corner key, and is not empty, we consider it as installed
+						bIsInstalled = carparts[j].iCorner != UINT_MAX && variables[carparts[j].iCorner].value.size() > 1;
 						break;
 					}
 				}
 
-				// Now we add elements that contain wear in their key to the property-list
-				if (ContainsStr(variables[i].key, STR_WEAR) && variables[i].type == ID_FLOAT)
+				// If the variable wasn't already in the maintenance entries read in from file, and is installed 
+				if (!bAlreadyExists && bIsInstalled)
 				{
-					bool bAlreadyExists = FALSE;
-					for (UINT j = 0; j < initial_size; j++)
+					// Build display string
+					std::wstring displayname = variables[i].key;
+					std::size_t pos1 = displayname.find(STR_WEAR);
+					if (pos1 != std::wstring::npos)
 					{
-						if (variables[i].key == carproperties[j].lookupname)
-						{
-							bAlreadyExists = TRUE;
-							break;
-						}
-					}
-					if (!bAlreadyExists)
-					{
-						// Build display string
-						std::wstring displayname = variables[i].key;
-						std::size_t pos1 = displayname.find(STR_WEAR);
-						if (pos1 != std::wstring::npos)
-						{
-							displayname.replace(pos1, 4, _T(""));
-							displayname += _T(" ");
-							displayname += STR_STATE;
-							std::transform(displayname.begin(), displayname.begin() + 1, displayname.begin(), ::toupper);
-							CarProperty cp = CarProperty(displayname, _T(""), 0.f, 100.f);
-							cp.index = i;
-							carproperties.push_back(cp);
-						}
+						displayname.replace(pos1, 4, _T(""));
+						displayname += _T(" ");
+						displayname += STR_STATE;
+						std::transform(displayname.begin(), displayname.begin() + 1, displayname.begin(), ::toupper);
+						CarProperty cp = CarProperty(displayname, _T(""), 0.f, 100.f);
+						cp.index = i;
+						carproperties.push_back(cp);
 					}
 				}
 			}
-			bListProcessed = TRUE;
 		}
-
 
 		TEXTMETRIC tm;
 		HDC hdc = GetDC(hwnd);
 		GetTextMetrics(hdc, &tm);
-		//int xChar = tm.tmAveCharWidth;
-		//int xUpper = (tm.tmPitchAndFamily & 1 ? 3 : 2) * xChar / 2;
 		int yChar = tm.tmHeight + tm.tmExternalLeading;
 
 		int offset = 6;
@@ -872,7 +925,6 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 
 		break;
 	}
-
 	default:
 		return FALSE;
 	}
@@ -1043,29 +1095,15 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 		std::string value = variables[indextable[iItem].index2].value;
 
 		//location 
-		std::string str;
-		std::string tstr;
-		for (UINT i = 0; i < 3; i++)
-		{
-			tstr = BinToFloatStr(value.substr((4 * i), 4));
-			TruncFloatStr(tstr);
-			str += (tstr + (", "));
-		}
-		str.resize(str.size() - 2);
-		SendMessage((GetDlgItem(hTransform, IDC_LOC)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
+
+		std::wstring str = BinToFloatVector(value, 3);
+		SendMessage((GetDlgItem(hTransform, IDC_LOC)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 
 		//rotation
-		str.clear();
-		tstr.clear();
 
 		if (!bEulerAngles)
 		{
-			for (UINT i = 0; i < 4; i++)
-			{
-				tstr = BinToFloatStr(value.substr(12 + (4 * i), 4));
-				TruncFloatStr(tstr);
-				str += (tstr + (", "));
-			}
+			str = BinToFloatVector(value, 4, 3);
 			SendMessage((GetDlgItem(hTransform, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[27].c_str());
 		}
 		else
@@ -1078,29 +1116,22 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 			q.w = BinToFloat(value.substr(12 + 12, 4));
 			a = QuatToEuler(&q);
 			double list[] = { a.yaw, a.pitch, a.roll };
+
 			for (UINT i = 0; i < 3; i++)
 			{
-				tstr = std::to_string(list[i]);
+				std::wstring tstr = std::to_wstring(list[i]);
 				TruncFloatStr(tstr);
-				str += (tstr + (", "));
+				str += (tstr + (L", "));
 			}
+			str.resize(str.size() - 2);
 			SendMessage((GetDlgItem(hTransform, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[28].c_str());
 		}
-
-		str.resize(str.size() - 2);
-		SendMessage((GetDlgItem(hTransform, IDC_ROT)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
+		SendMessage((GetDlgItem(hTransform, IDC_ROT)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 
 		//scale
-		str.clear();
-		tstr.clear();
-		for (UINT i = 0; i < 3; i++)
-		{
-			tstr = BinToFloatStr(value.substr(28 + (4 * i), 4));
-			TruncFloatStr(tstr);
-			str += (tstr + (", "));
-		}
-		str.resize(str.size() - 2);
-		SendMessage((GetDlgItem(hTransform, IDC_SCA)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
+		str = BinToFloatVector(value, 3, 7);
+		SendMessage((GetDlgItem(hTransform, IDC_SCA)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+
 		//MSC dev requested removal of scale property
 		if (!bAllowScale)
 			::EnableWindow(GetDlgItem(hTransform, IDC_SCA), FALSE);
@@ -1108,9 +1139,8 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 		//tag
 		if (value.size() > 40)
 		{
-			str.clear();
-			str = std::move(value.substr(41));
-			SendMessage((GetDlgItem(hTransform, IDC_TAG)), WM_SETTEXT, 0, (LPARAM)StringToWString(str).c_str());
+			str = StringToWString(value.substr(41));
+			SendMessage((GetDlgItem(hTransform, IDC_TAG)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 			SendMessage((GetDlgItem(hTransform, IDC_TAG)), EM_SETLIMITTEXT, 255, 0);
 		}
 
@@ -1132,7 +1162,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 
 				EDITBALLOONTIP ebt;
 				ebt.cbStruct = sizeof(EDITBALLOONTIP);
-				ebt.pszTitle = _T("Error!");
+				ebt.pszTitle = ErrorTitle.c_str();
 				ebt.ttiIcon = TTI_ERROR_LARGE;
 
 				//location
@@ -1264,7 +1294,7 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				HWND hEdit;
 				EDITBALLOONTIP ebt;
 				ebt.cbStruct = sizeof(EDITBALLOONTIP);
-				ebt.pszTitle = _T("Error!");
+				ebt.pszTitle = ErrorTitle.c_str();
 				ebt.ttiIcon = TTI_ERROR_LARGE;
 
 				hEdit = GetDlgItem(hColor, IDC_COL);
@@ -1382,6 +1412,230 @@ BOOL CALLBACK StringProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
+BOOL CALLBACK KeyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+{
+	static int s_scrollYdelta = 0;
+	static HBRUSH s_backgroundBrush;
+
+	switch (Message)
+	{
+	case WM_INITDIALOG:
+	{
+		s_backgroundBrush = CreateSolidBrush((COLORREF)GetSysColor(COLOR_WINDOW));
+		ShowScrollBar(hwnd, SB_VERT, FALSE);
+		break;
+	}
+	case WM_PAINT:
+	{
+		PAINTSTRUCT ps;
+		HDC hdc;
+		hdc = BeginPaint(hwnd, &ps);
+
+		POINT origin;
+		GetWindowOrgEx(hdc, &origin);
+		SetWindowOrgEx(hdc, origin.x, origin.y + s_scrollYdelta, 0);
+
+		// Move the paint rectangle into the new coordinate system
+		OffsetRect(&ps.rcPaint, 0, s_scrollYdelta);
+
+		// Restore coordinates
+		SetWindowOrgEx(hdc, origin.x, origin.y, 0);
+		EndPaint(hwnd, &ps);
+		break;
+	}
+	case WM_VSCROLL:
+	{
+		SCROLLINFO si = {};
+		si.cbSize = sizeof(SCROLLINFO);
+		si.fMask = SIF_ALL;
+		GetScrollInfo(hwnd, SB_VERT, &si);
+
+		int scrollY = GetScrollbarPos(hwnd, SB_VERT, LOWORD(wParam));
+		if (scrollY == -1)
+			break;
+
+		s_scrollYdelta = si.nPos - scrollY;
+
+		ScrollWindowEx(hwnd, 0, s_scrollYdelta, NULL, NULL, NULL, NULL, SW_SCROLLCHILDREN | SW_ERASE | SW_INVALIDATE);
+		SetScrollPos(hwnd, SB_VERT, scrollY, TRUE);
+
+		UpdateWindow(hwnd);
+		break;
+	}
+	case WM_UPDATESIZE:
+	{
+		RECT ScrollRekt;
+		GetWindowRect(hwnd, &ScrollRekt);
+		ScrollRekt.bottom -= ScrollRekt.top;
+
+		int windowsize = wParam - ScrollRekt.bottom;
+
+		if (windowsize <= 0)
+			ShowScrollBar(hwnd, SB_VERT, FALSE);
+		else
+		{
+			int pagesize = static_cast<int>(pow(ScrollRekt.bottom, 2) / wParam);
+			SCROLLINFO si = {};
+			ZeroMemory(&si, sizeof(SCROLLINFO));
+			si.cbSize = sizeof(SCROLLINFO);
+			si.fMask = SIF_ALL;
+			si.nMax = windowsize + pagesize;
+			si.nPage = pagesize;
+			SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+		}
+		break;
+	}
+	case WM_CTLCOLORDLG:
+	{
+		// Paint background white
+		return (INT_PTR)(s_backgroundBrush);
+	}
+	case WM_CTLCOLORSTATIC:
+	{
+		DWORD CtrlID = GetDlgCtrlID((HWND)lParam);
+
+
+		// if it's ID of a property state label static
+		if (CtrlID >= ID_PL_STATE && CtrlID < (ID_PL_STATE + ID_PL_BASE_OFFSET))
+		{
+			HDC hdcStatic = (HDC)wParam;
+
+			PLID *plID = (PLID *)GetWindowLong((HWND)lParam, GWL_USERDATA);
+			if (plID != nullptr)
+			{
+				SetTextColor(hdcStatic, RGB(255, 255, 255));
+				//SetBkColor(hdcStatic, (COLORREF)GetSysColor(COLOR_WINDOW));
+				SetBkColor(hdcStatic, plID->cColor);
+				return (INT_PTR)(s_backgroundBrush);		// probably obsolete
+			}
+		}
+		// Always return true to avoid gray background
+		return TRUE;
+	}
+	case WM_DESTROY:
+	{
+		DeleteObject(s_backgroundBrush);
+		break;
+	}
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL CALLBACK KeyManagerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	static std::vector<std::wstring> KeyNames = { L"keyferndale", L"keygifu", L"keyhayoso", L"keyhome", L"keyruscko", L"keysatsuma"};
+	static HWND hKeys;
+
+	switch (message)
+	{
+	case WM_INITDIALOG:
+	{
+		// Create child key list. We probably don't need a scrollbar here, ever - but it's better to be on the safe side
+		const int BorderMargin = 12;
+		RECT rekt;
+		GetClientRect(hwnd, &rekt);
+		const int ListWidth = rekt.right - rekt.left - 2 * BorderMargin;
+		const int ListHeight = rekt.bottom - rekt.top - 37 - 2 * BorderMargin;
+
+		hKeys = CreateDialog(hInst, MAKEINTRESOURCE(IDD_KEYLIST), hwnd, KeyListProc);
+		ShowWindow(hKeys, SW_SHOW);
+		SetWindowPos(hKeys, NULL, BorderMargin, BorderMargin, ListWidth, ListHeight, SWP_SHOWWINDOW);
+
+		TEXTMETRIC tm;
+		HDC hdc = GetDC(hwnd);
+		GetTextMetrics(hdc, &tm);
+		int yChar = tm.tmHeight + tm.tmExternalLeading;
+		int offset = 6;
+
+		// For every key we add a checkbox, if the coresponding location# was found
+		for (UINT index = 0; index < KeyNames.size(); index++)
+		{
+			std::string LocationName = "location" + std::to_string(index + 1);
+			if ((EntryExists(LocationName) < 0) || EntryExists(KeyNames[index]) < 0 )
+				continue;
+
+			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, KeyNames[index].substr(3).c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hKeys, (HMENU)index, hInst, NULL);
+			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+			// Get the result
+			const int Result = *((int*)(variables[EntryExists(KeyNames[index])].value.substr(0, 4).data()));
+
+			// Get the multiplier
+			std::wstring MultiplierStr;
+			FormatString(MultiplierStr, variables[EntryExists(std::string("keycheck"))].value, ID_INT);
+			const int Multiplier = std::stoi(MultiplierStr, NULL);
+
+			// Get the base value
+			const std::string BaseValue = variables[EntryExists(LocationName)].value;
+			const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
+			
+			// If the result is correct, check the box
+			if ((Base * Multiplier) == Result)
+				CheckDlgButton(hKeys, index, BST_CHECKED);
+
+			offset += yChar;
+		}
+
+		// Apply size
+		PostMessage(hKeys, WM_UPDATESIZE, offset + 3, NULL);
+
+		// Invalidate and redraw to avoid transparency issues
+		GetClientRect(hKeys, &rekt);
+		InvalidateRect(hKeys, &rekt, TRUE);
+		RedrawWindow(hKeys, &rekt, NULL, RDW_ERASE | RDW_INVALIDATE);
+		break;
+	}
+	case WM_COMMAND:
+	{
+		if (HIWORD(wParam) == BN_CLICKED)
+		{
+			switch (LOWORD(wParam))
+			{
+			case IDC_APPLY:
+			{
+				for (UINT index = 0; index < KeyNames.size(); index++)
+				{
+					std::string LocationName = "location" + std::to_string(index + 1);
+					if ((EntryExists(LocationName) < 0) || EntryExists(KeyNames[index]) < 0)
+						continue;
+
+					const int ResultIndex = EntryExists(KeyNames[index]);
+					const int Result = *((int*)(variables[ResultIndex].value.substr(0, 4).data()));
+					std::wstring MultiplierStr;
+					FormatString(MultiplierStr, variables[EntryExists(std::string("keycheck"))].value, ID_INT);
+					const int Multiplier = std::stoi(MultiplierStr, NULL);
+					const std::string BaseValue = variables[EntryExists(LocationName)].value;
+					const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
+
+					if (IsDlgButtonChecked(hKeys, index) == BST_CHECKED && Base * Multiplier != Result)
+					{
+						UpdateValue(std::to_wstring(Base * Multiplier), ResultIndex);
+					}
+					else if (IsDlgButtonChecked(hKeys, index) == BST_UNCHECKED && Result != 0)
+					{
+						UpdateValue(std::to_wstring(0), ResultIndex);
+					}
+				}
+				// Leak into Discard to close the window
+			}
+			case IDC_DISCARD:
+			{
+				EndDialog(hwnd, 0);
+				DestroyWindow(hwnd);
+				EnableWindow(hDialog, TRUE);
+				break;
+			}
+			}
+		}
+	}
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
+
 BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
@@ -1390,7 +1644,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 		{
 			if (itemTypes.empty() || itemAttributes.empty())
 			{
-				MessageBox(hDialog, GLOB_STRS[26].c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+				MessageBox(hDialog, GLOB_STRS[26].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 				EndDialog(hwnd, 0);
 				DestroyWindow(hwnd);
 

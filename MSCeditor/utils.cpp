@@ -2,6 +2,11 @@
 #include <shobjidl.h> //COM
 #include <fstream> //file stream input output
 #include <algorithm> //sort
+
+#include <iostream>
+#include <cwctype>
+#include <cctype>
+
 #include <Urlmon.h>
 #undef max
 #undef min
@@ -264,6 +269,27 @@ void BreakLPARAM(const LPARAM &lparam, int &i, int &j)
 	}
 }
 
+// 0 if not equal, 1 if equal without wildcard, 2 if equal with wildcard
+BOOL CompareStrsWithWildcard(const std::wstring &StrWithNumber, const std::wstring &StrWithWildcard)
+{
+	UINT offset = 0;
+	for (UINT i = 0; i < (StrWithNumber.size() - offset); i++)
+	{
+		if (StrWithWildcard[i + (offset > 0 ? 1 : 0)] == '*')
+		{
+			for (offset = i; offset < StrWithNumber.size(); offset++)
+				if (!std::iswdigit(StrWithNumber[offset]))
+					break;
+			offset += -(int)i;
+		}
+		wchar_t bla1 = StrWithNumber[i + offset];
+		wchar_t bla2 = StrWithWildcard[i + (offset > 0 ? 1 : 0)];
+		if (StrWithNumber[i + offset] != StrWithWildcard[i + (offset > 0 ? 1 : 0)])
+			return false;
+	}
+	return 1 + offset;
+}
+
 int CompareStrs(const std::wstring &str1, const std::wstring &str2)
 {
 	UINT max = str1.size();
@@ -384,7 +410,7 @@ bool DatesMatch(SYSTEMTIME stUTC)
 		if (filedate.wYear != stUTC.wYear) return FALSE;
 		return TRUE;
 	}
-	else return TRUE;
+	return TRUE;
 }
 
 bool FileChanged()
@@ -397,7 +423,7 @@ bool FileChanged()
 		TCHAR buffer[512];
 		memset(buffer, 0, 512);
 		swprintf(buffer, 512, GLOB_STRS[17].c_str(), filepath.c_str());
-		switch (MessageBox(NULL, buffer, Title.c_str(), MB_YESNO | MB_ICONWARNING))
+		switch (MessageBox(NULL, buffer, ErrorTitle.c_str(), MB_YESNO | MB_ICONWARNING))
 		{
 			case IDNO:
 			{
@@ -420,7 +446,7 @@ bool FileChanged()
 			
 				if (!bSucc)
 				{
-					MessageBox(NULL, GLOB_STRS[38].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+					MessageBox(NULL, GLOB_STRS[38].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					// Leak into IDYES to reload
 				}
 				
@@ -437,7 +463,7 @@ bool FileChanged()
 				}
 				else
 				{
-					MessageBox(NULL, GLOB_STRS[39].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+					MessageBox(NULL, GLOB_STRS[39].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					UnloadFile();
 				}
 				break;
@@ -459,8 +485,7 @@ void OpenFileDialog()
 		IFileOpenDialog *pFileOpen;
 
 		// Create the FileOpenDialog object.
-		hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL,
-			IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
+		hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
 
 		// Try to set default folder to LocalLow
 		IShellItem *DefaultFolder = NULL;
@@ -530,7 +555,6 @@ void UnloadFile()
 		
 	tmpfilepath.clear();
 	bFiledateinit = FALSE;
-	bListProcessed = FALSE; // Car property list needs reprocessing when new file is opened
 	bSaveFromTemp = FALSE;
 
 	SetWindowText(hDialog, (LPCWSTR)Title.c_str());
@@ -565,11 +589,12 @@ void UnloadFile()
 	EnableMenuItem(menu, GetMenuItemID(menu, 0), MF_GRAYED);
 	EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
 	EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_GRAYED);
+	EnableMenuItem(menu, GetMenuItemID(menu, 3), MF_GRAYED);
 
 	MENUITEMINFO info = { sizeof(MENUITEMINFO) };
 	info.fMask = MIIM_STATE;
 	info.fState = MFS_GRAYED;
-	SetMenuItemInfo(menu, 3, TRUE, &info);
+	SetMenuItemInfo(menu, 4, TRUE, &info);
 
 	for (UINT i = 0; i < carproperties.size(); i++)
 		carproperties[i].index = UINT_MAX;
@@ -583,7 +608,7 @@ bool CanClose()
 		memset(buffer, 0, 128);
 		swprintf(buffer, 128, GLOB_STRS[7].c_str(), filepath.c_str());
 
-		switch (MessageBox(NULL, buffer, Title.c_str(), MB_YESNOCANCEL | MB_ICONWARNING))
+		switch (MessageBox(NULL, buffer, ErrorTitle.c_str(), MB_YESNOCANCEL | MB_ICONWARNING))
 		{
 		case IDNO:
 			return TRUE;
@@ -592,7 +617,7 @@ bool CanClose()
 			int result = SaveFile();
 			if (result > 0)
 			{
-				MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+				MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 				return FALSE;
 			}
 			else
@@ -723,6 +748,38 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 				bAllowScale = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
 		}
 	}
+}
+
+bool DebugFetchVariablesFromAssets()
+{
+	std::wifstream ifs(L"E:\\Games\\steamapps\\common\\My Summer Car\\mysummercar_Data\\sharedassets3.assets", std::wifstream::in | std::wifstream::binary);
+	std::wstring str;
+	str.reserve(512);
+
+	std::wofstream dump(L"vars_dump.txt", std::wofstream::out, std::wofstream::trunc);
+	if (!dump.is_open())
+		return FALSE;
+
+	while (!ifs.eof())
+	{
+		wchar_t c = ifs.get();
+
+		if (std::iswdigit(c) || std::isalpha(c))
+			str += c;
+		else
+		{
+			if (str.size() >= 10)
+			{
+				std::wcout << str << std::endl;
+				if (str.substr(0, 9) == L"UniqueTag")
+					dump << str << std::endl;
+			}
+			str.clear();
+		}
+	}
+	dump.close();
+	ifs.close();
+	return TRUE;
 }
 
 BOOL LoadDataFile(const std::wstring &datafilename)
@@ -1007,7 +1064,7 @@ int SaveFile()
 
 	if (bMakeBackup)
 	{
-		// We clean up ALL old txt backup files in direction and rename to bak file extension so it looks nicer and avoid double backups
+		// We clean up ALL old txt backup files in directory and rename to bak file extension so it looks nicer and avoid double backups
 
 		wstring directory;
 		size_t found = filepath.find_last_of(L"\\");
@@ -1093,10 +1150,10 @@ int SaveFile()
 void InitMainDialog(HWND hwnd)
 {
 	UnloadFile();
-	ErrorCode err = ScoopSavegame();
+	ErrorCode err = ParseSavegame();
 	if (err.id != -1)
 	{
-		MessageBox(hDialog, (GLOB_STRS[31] + std::to_wstring(err.info) + GLOB_STRS[err.id]).c_str(), _T("Error"), MB_OK | MB_ICONERROR);
+		MessageBox(hDialog, (GLOB_STRS[31] + std::to_wstring(err.info) + GLOB_STRS[err.id]).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 	}
 	else
 	{
@@ -1108,7 +1165,7 @@ void InitMainDialog(HWND hwnd)
 		}
 		else
 		{
-			MessageBox(hDialog, GLOB_STRS[6].c_str(), L"Error", MB_OK | MB_ICONERROR);
+			MessageBox(hDialog, GLOB_STRS[6].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 			bFiledateinit = FALSE;
 		}
 
@@ -1147,7 +1204,7 @@ void InitMainDialog(HWND hwnd)
 			TCHAR buffer[128];
 			memset(buffer, 0, 128);
 			swprintf(buffer, 128, GLOB_STRS[37].c_str(), tmpfilepath.c_str());
-			MessageBox(hDialog, buffer, Title.c_str(), MB_OK | MB_ICONERROR);
+			MessageBox(hDialog, buffer, ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 			EndDialog(hDialog, 0);
 			return;
 		}
@@ -1155,10 +1212,18 @@ void InitMainDialog(HWND hwnd)
 		// Keep file open and store handle
 		hTempFile = CreateFile(tmpfilepath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
 
-		TCHAR buffer[128];
-		memset(buffer, 0, 128);
-		swprintf(buffer, 128, _T("%s - [%s]"), Title.c_str(), filepath.c_str());
-		SetWindowText(hDialog, (LPCWSTR)buffer);
+		// Hide username from title
+		static const std::wstring UsersStr = L"\\Users\\";
+		std::wstring TitleStr(128, '\0');
+		swprintf(&TitleStr[0], 128, _T("%s - [%s]"), Title.c_str(), filepath.c_str());
+		std::string::size_type Found = TitleStr.find(UsersStr);
+		if (Found != std::string::npos)
+		{
+			std::string::size_type Found2 = TitleStr.find(L"\\", Found + UsersStr.length());
+			if (Found2 != std::string::npos)
+				TitleStr.replace(Found + UsersStr.length(), Found2 - Found - UsersStr.length(), L"...");
+		}
+		SetWindowText(hDialog, (LPCWSTR)TitleStr.c_str());
 
 		LVCOLUMN lvc;
 
@@ -1195,6 +1260,9 @@ void InitMainDialog(HWND hwnd)
 			EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 
+		if (EntryExists(std::string("keycheck")) >= 0)
+			EnableMenuItem(menu, GetMenuItemID(menu, 3), MF_ENABLED);
+
 		for (UINT i = 0; i < itemTypes.size(); i++)
 		{
 			if (EntryExists(itemTypes[i].GetID()) >= 0)
@@ -1202,10 +1270,11 @@ void InitMainDialog(HWND hwnd)
 				MENUITEMINFO info = { sizeof(MENUITEMINFO) };
 				info.fMask = MIIM_STATE;
 				info.fState = MFS_ENABLED;
-				SetMenuItemInfo(menu, 3, TRUE, &info);
+				SetMenuItemInfo(menu, 4, TRUE, &info);
 				break;
 			}
 		}
+		TCHAR buffer[128];
 		memset(buffer, 0, 128);
 		swprintf(buffer, 128, GLOB_STRS[11].c_str(), 0);
 		SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)buffer);
@@ -1893,39 +1962,64 @@ void BatchProcessBolts(bool fix)
 				UINT bolts = 0, maxbolts = 0;
 				std::vector<UINT> boltlist;
 
-				if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist))
+				if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist) && (maxbolts != bolts || !fix))
 				{
-					if (maxbolts != bolts || !fix)
+					int boltstate = fix ? 8 : 0;
+					std::vector<UINT> boltlist;
+					for (UINT j = 0; j < maxbolts; j++)
 					{
-						int boltstate = fix ? 8 : 0;
-						std::vector<UINT> boltlist;
-						for (UINT j = 0; j < maxbolts; j++)
-						{
-							boltlist.push_back(boltstate);
-						}
-						int tightness = boltlist.size() * boltstate;
+						boltlist.push_back(boltstate);
+					}
+					int tightness = boltlist.size() * boltstate;
 
-						// adjust tightness for special cases, if there are any
-						if (!partSCs.empty() && fix)
+					// adjust tightness for special cases, if there are any
+					if (!partSCs.empty() && fix)
+					{
+						for (UINT j = 0; j < partSCs.size(); j++)
 						{
-							for (UINT j = 0; j < partSCs.size(); j++)
+							if (partSCs[j].id == 0 && partSCs[j].str == carparts[i].name)
 							{
-								if (partSCs[j].id == 0)
-								{
-									if (partSCs[j].str == carparts[i].name)
-									{
-										int offset = static_cast<int>(::strtol((WStringToString(partSCs[j].param)).c_str(), NULL, 10));
-										tightness >= 8 ? tightness += offset : tightness = 0;
-										break;
-									}
-								}
+								int offset = static_cast<int>(::strtol((WStringToString(partSCs[j].param)).c_str(), NULL, 10));
+								tightness >= 8 ? tightness += offset : tightness = 0;
+								break;
 							}
 						}
-
-						if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[fix], carparts[i].iBolted);
-						UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
-						UpdateValue(std::to_wstring(tightness), carparts[i].iTightness);
 					}
+
+					if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[fix], carparts[i].iBolted);
+					UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
+					UpdateValue(std::to_wstring(tightness), carparts[i].iTightness);
+				}
+			}
+		}
+	}
+}
+
+void BatchProcessWiring()
+{
+	static const std::wstring WiringIdentifier = L"wiring";
+	for (UINT i = 0; i < carparts.size(); i++)
+	{
+		if (StartsWithStr(carparts[i].name, WiringIdentifier))
+		{
+			if (carparts[i].iInstalled != UINT_MAX)
+				UpdateValue(bools[TRUE], carparts[i].iInstalled);
+
+			if (carparts[i].iTightness != UINT_MAX && carparts[i].iBolts != UINT_MAX)
+			{
+				UINT bolts = 0, maxbolts = 0;
+				std::vector<UINT> boltlist;
+
+				if (BinToBolts(variables[carparts[i].iBolts].value, bolts, maxbolts, boltlist) && (maxbolts != bolts))
+				{
+					std::vector<UINT> boltlist;
+					for (UINT j = 0; j < maxbolts; j++)
+						boltlist.push_back(8);
+					int tightness = boltlist.size() * 8;
+
+					if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[TRUE], carparts[i].iBolted);
+					UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
+					UpdateValue(std::to_wstring(tightness), carparts[i].iTightness);
 				}
 			}
 		}
@@ -2122,91 +2216,48 @@ void TruncFloatStr(std::string &str)
 
 //format variables vector value for display
 
-template <typename TSTRING>
-void FormatString(std::wstring &str, const TSTRING &value, const UINT &type)
+void FormatString(std::wstring &str, const std::string &value, const UINT &type)
 {
-	str = StringToWString(value);
-
 	switch (type)
 	{
 	case ID_FLOAT:
 	{
-		str = BinToFloatStr(str);
+		str = BinToFloatStr(value);
 		TruncFloatStr(str);
 		break;
 	}
 	case ID_BOOL:
 	{
-		str = (str.c_str())[0] == 0x00 ? bools[0] : bools[1];
+		str = bools[(value.c_str())[0]];
 		break;
 	}
 	case ID_COLOR:
+	case ID_TRANSFORM:
 	case ID_VECTOR:
 	{
-		UINT iMax = type == ID_COLOR ? 4 : 3;
-		std::wstring tstr;
-		for (UINT i = 0; i < iMax; i++)
-		{
-			std::wstring astr;
-			astr = BinToFloatStr(str.substr(0 + (4 * i), 4));
-			TruncFloatStr(astr);
-			tstr.append(astr + _T(", "));
-		}
-		tstr.resize(tstr.size() - 2);
-		str = tstr;
-		break;
-	}
-	case ID_TRANSFORM:
-	{
-		std::wstring tstr;
-		for (UINT i = 0; i < 3; i++)
-		{
-			std::wstring astr;
-			astr = BinToFloatStr(str.substr(0 + (4 * i), 4));
-			TruncFloatStr(astr);
-			tstr.append(astr + _T(", "));
-		}
-		tstr.resize(tstr.size() - 2);
-		str = tstr;
+		str = BinToFloatVector(value, (type == ID_COLOR) ? 4 : 3);
 		break;
 	}
 	case ID_STRING:
 	{
-		str = str.substr(1);
+		str = StringToWString(value.substr(1));
 		break;
 	}
 	case ID_STRINGL:
 	{
-		if (str.empty())
-		{
+		if (value.empty())
 			str = _T("<empty>");
-		}
 		else
 		{
-			char fuck[4];
-			for (UINT i = 0; i < 4; ++i)
-				fuck[i] = (char)value[i];
-			int i;
-			i = *((int*)&fuck);
-
-			TCHAR buffer[128];
-			memset(buffer, 0, 128);
-
-			swprintf(buffer, 128, GLOB_STRS[9].c_str(), i);
-			str = buffer;
+			std::wstring s(128, '\0');
+			s.resize(std::swprintf(&s[0], s.size(), GLOB_STRS[9].c_str(), *((int*)(value.substr(0, 4).data()))));
+			str = s;
 		}
 		break;
 	}
 	case ID_INT:
 	{
-		char fuck[4];
-		for (UINT i = 0; i < 4; ++i)
-		{
-			fuck[i] = (char)value[i];
-		}
-		int i;
-		i = *((int*)&fuck);
-		str = std::to_wstring(i);
+		str = std::to_wstring(*((int*)(value.data())));
 		break;
 	}
 	default:
@@ -2363,62 +2414,43 @@ str[(j * 4) + i] = holdmybeer[size - i - 1];
 float BinToFloat(const std::string &str)
 {
 	if (str.size() != 4) return 0;
-	char fuck[4];
-	for (UINT i = 0; i < 4; ++i)
-	{
-		fuck[i] = (char)str[i];
-	}
-	float f;
-	f = *((float*)&fuck);
-
-	return f;
+	return *((float*)(str.data()));
 }
 
-std::string BinToFloatStr(const std::string &str)
+std::wstring BinToFloatStr(const std::string &str)
 {
-	if (str.size() != 4) return "0";
-	char fuck[4];
-	for (UINT i = 0; i < 4; ++i)
-	{
-		fuck[i] = (char)str[i];
-	}
-	float f;
-	f = *((float*)&fuck);
+	std::wstring s(32, '\0');
+	int length = std::swprintf(&s[0], s.size(), L"%.10f", BinToFloat(str));
+	if (length < 0)
+		return L"NaN";
 
-	std::string s(32, '\0');
-	auto written = std::snprintf(&s[0], s.size(), "%.10f", f);
-	s.resize(written);
+	s.resize(length);
 	return s;
 }
 
-std::wstring BinToFloatStr(const std::wstring &str)
+std::wstring BinToFloatVector(const std::string &value, int max, int start)
 {
-	if (str.size() != 4) return L"0";
-	char fuck[4];
-	for (UINT i = 0; i < 4; ++i)
-	{
-		fuck[i] = (char)str[i];
-	}
-	float f;
-	f = *((float*)&fuck);
+	std::wstring VectorStr;
+	max += start;
 
-	std::string s(32, '\0');
-	auto written = std::snprintf(&s[0], s.size(), "%.10f", f);
-	s.resize(written);
-	return StringToWString(s);
+	if ((max * 4) > (int)value.size())
+		return L"";
+
+	for (int i = start; i < max; i++)
+	{
+		std::wstring astr = BinToFloatStr(value.substr((4 * i), 4));
+		TruncFloatStr(astr);
+		VectorStr.append(astr + _T(", "));
+	}
+	VectorStr.resize(VectorStr.size() - 2);
+	return VectorStr;
 }
 
 std::string FloatStrToBin(const std::string &str)
 {
 	std::string out;
 	float x = static_cast<float>(::strtod(str.c_str(), NULL));
-	char *a;
-	a = (char *)&x;
-
-	for (int i = 0; i < 4; ++i)
-	{
-		out += a[i];
-	};
+	out.assign((char *)&x, 4);
 	return out;
 }
 
@@ -2426,26 +2458,14 @@ std::string IntStrToBin(const std::string &str)
 {
 	std::string out;
 	int x = static_cast<int>(::strtol(str.c_str(), NULL, 10));
-	char *a;
-	a = (char *)&x;
-
-	for (int i = 0; i < 4; ++i)
-	{
-		out += a[i];
-	};
+	out.assign((char *)&x, 4);
 	return out;
 }
 
 std::string IntToBin(int x)
 {
 	std::string out;
-	char *a;
-	a = (char *)&x;
-
-	for (int i = 0; i < 4; ++i)
-	{
-		out += a[i];
-	};
+	out.assign((char *)&x, 4);
 	return out;
 }
 
@@ -2460,6 +2480,31 @@ UINT ParseItemID(const std::wstring &str, const UINT sIndex)
 		}
 	}
 	return UINT_MAX;
+}
+
+bool StartsWithStrWildcard(const std::wstring &target, const std::wstring &str)
+{
+	if (str.size() > target.size())
+		return FALSE;
+
+	std::wstring tTar = target, tStr = str;
+	UINT max = str.size();
+	for (UINT i = 0; i < max; i++)
+	{
+		tTar[i] = (wchar_t)tolower(tTar[i]);
+		tStr[i] = (wchar_t)tolower(tStr[i]);
+		if (tTar[i] == '*')
+		{
+			tTar.replace(i, 1, L"");
+			UINT j = i;
+			for (; j < max && isdigit(tStr[j]); j++);
+			tStr.replace(i, j - i, L"");
+			max += -(int)(j - i);
+		}
+		if (tTar[i] != tStr[i] && i < max)
+			return FALSE;
+	}
+	return TRUE;
 }
 
 bool StartsWithStr(const std::wstring &target, const std::wstring &str)
@@ -2504,21 +2549,7 @@ bool ContainsStr(const std::wstring &target, const std::wstring &str)
 	return FALSE;
 }
 
-/*
-std::wstring MakeHexString(const std::wstring &str)
-{
-std::string tstr;
-for (UINT i = 0; i < str.size(); ++i)
-{
-const char ch = static_cast<char>(str[i]);
-tstr.append(&hex[(ch & 0xF0) >> 4], 1);
-tstr.append(&hex[ch & 0xF], 1);
-}
-return StringToWString(tstr);
-}
-*/
-
-ErrorCode ScoopSavegame()
+ErrorCode ParseSavegame()
 {
 	using namespace std;
 	vector<Entry> indexed_entries;
