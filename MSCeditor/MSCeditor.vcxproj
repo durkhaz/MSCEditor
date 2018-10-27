@@ -171,7 +171,7 @@
     <ResourceCompile Include="MSCeditor.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="msc.ico" />
+    <Image Include="msce.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

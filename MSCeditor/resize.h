@@ -1,3 +1,5 @@
+#include "stdint.h"
+
 
 #define DIALOGRESIZECONTROLCLASSW L"DialogResizeControlClassW"
 #define DIALOGRESIZECONTROLCLASSA "DialogResizeControlClassA"
@@ -20,7 +22,7 @@
 #ifndef RC_INVOKED
 
 BOOL CALLBACK
-ResizeDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage);
+ResizeDialogProc(HWND hDlg, uint32_t uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage);
 
 BOOL
 ResizeDialogInitialize(HINSTANCE hInst);

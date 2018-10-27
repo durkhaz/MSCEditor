@@ -3,31 +3,56 @@
 #include <string> 
 #include <tchar.h> 
 #include <algorithm> 
-typedef unsigned int UINT;
-typedef unsigned long long int ULINT;
 
 struct QTRN
 {
-	double x = 0;
-	double y = 0;
-	double z = 0;
-	double w = 1;
+	float x, y, z, w;
+
+	QTRN()
+	{
+		x = 0.f;
+		y = 0.f;
+		z = 0.f;
+		w = 1.f;
+	}
+	QTRN(float x_, float y_, float z_, float w_)
+		: x(std::move(x_)), y(std::move(y_)), z(std::move(z_)), w(std::move(w_))
+	{
+
+	}
 };
 
 struct ANGLES
 {
-	double pitch = 0;
-	double roll = 0;
-	double yaw = 0;
+	float x, y, z;
+
+	ANGLES()
+	{
+		x = 0.f;
+		y = 0.f;
+		z = 0.f;
+	}
+
+	ANGLES(float x_, float y_, float z_)
+		: x(std::move(x_)), y(std::move(y_)), z(std::move(z_))
+	{
+
+	}
+
+	inline ANGLES operator *(float f)
+	{
+		return ANGLES(x * f, y * f, z * f);
+	}
 };
 
-struct TextLookup
+struct TimetableEntry
 {
-	std::wstring badstring;
-	std::wstring newstring;
+	std::wstring time;
+	std::wstring day;
+	std::wstring name;
 
-	TextLookup(std::wstring a_, std::wstring b_)
-		: badstring(std::move(a_)), newstring(std::move(b_))
+	TimetableEntry(std::wstring time_, std::wstring day_, std::wstring name_)
+		: time(std::move(time_)), day(std::move(day_)), name(std::move(name_))
 	{
 
 	}
@@ -35,31 +60,32 @@ struct TextLookup
 
 struct CarPart
 {
-	std::wstring name = _T("");
-	UINT iInstalled = UINT_MAX;
-	UINT iBolts = UINT_MAX;
-	UINT iTightness = UINT_MAX;
-	UINT iBolted = UINT_MAX;
-	UINT iDamaged = UINT_MAX;
-	UINT iCorner = UINT_MAX;
+	std::wstring name = L"";
+	uint32_t iInstalled = UINT_MAX;
+	uint32_t iBolts = UINT_MAX;
+	uint32_t iTightness = UINT_MAX;
+	uint32_t iBolted = UINT_MAX;
+	uint32_t iDamaged = UINT_MAX;
+	uint32_t iCorner = UINT_MAX;
 };
 
 struct CarProperty
 {
 	std::wstring displayname;
 	std::wstring lookupname;
-	float optimum;
-	float worst;
-	float recommended;
-	UINT index;
+	std::string optimumBin;
+	std::string worstBin;
+	std::string recommendedBin;
+	uint32_t datatype;
+	uint32_t index;
 
 	CarProperty() 
 	{
 	
 	}
 
-	CarProperty(std::wstring displayname_, std::wstring lookupname_, float worst_, float optimum_, float recommended_ = std::numeric_limits<float>::quiet_NaN(), UINT index_ = UINT_MAX)
-		: displayname(std::move(displayname_)), lookupname(std::move(lookupname_)), worst(std::move(worst_)), optimum(std::move(optimum_)), recommended(std::move(recommended_)), index(std::move(index_))
+	CarProperty(std::wstring displayname_, std::wstring lookupname_, uint32_t datatype_, std::string worst_, std::string optimum_, std::string recommended_ = "", uint32_t index_ = UINT_MAX)
+		: displayname(std::move(displayname_)), lookupname(std::move(lookupname_)), datatype(std::move(datatype_)), worstBin(std::move(worst_)), optimumBin(std::move(optimum_)), recommendedBin(std::move(recommended_)), index(std::move(index_))
 	{
 
 	}
@@ -67,58 +93,39 @@ struct CarProperty
 
 struct IndexLookup
 {
-	UINT index1;
-	UINT index2;
+	uint32_t index1;
+	uint32_t index2;
 
-	IndexLookup(UINT index1_, UINT index2_)
+	IndexLookup(uint32_t index1_, uint32_t index2_)
 		: index1(std::move(index1_)), index2(std::move(index2_))
 	{
 
 	}
 };
 
-struct Entry
+struct SpecialCase
 {
-	std::wstring name;
-	UINT index;
+	std::wstring str = L"";
+	uint32_t id = -1;
+	std::string param = "";
 
-	Entry(std::wstring name_, UINT index_)
-		: name(std::move(name_)), index(std::move(index_))
-	{
-
-	}
-
-	inline
-		friend bool operator <(const Entry& x, const Entry& y) //operator overload for sorting 
-	{
-		std::wstring xname = x.name;
-		std::wstring yname = y.name;
-		transform(xname.begin(), xname.end(), xname.begin(), ::tolower);
-		transform(yname.begin(), yname.end(), yname.begin(), ::tolower);
-		return xname < yname;
-	}
-};
-
-struct SC
-{
-	std::wstring str = _T("");
-	UINT id = -1;
-	std::wstring param = _T("");
-
-	SC(std::wstring str_, UINT id_, std::wstring param_)
+	SpecialCase(std::wstring str_, uint32_t id_, std::string param_)
 		: str(std::move(str_)), id(std::move(id_)), param(std::move(param_))
 	{
 
 	}
 };
 
-struct ErrorCode
+struct EntryHeader
 {
-	int id;
-	int info;
+	uint8_t ContainerType = 0x00;
+	uint32_t KeyType = UINT_MAX;
+	uint32_t ValueType = UINT_MAX;
+	uint8_t KeyProperty = 0x00;
+	uint8_t ValueProperty = 0x00;
 
-	ErrorCode(int id_, int info_ = -1)
-		: id(std::move(id_)), info(std::move(info_))
+	EntryHeader(uint8_t ContainerType_, uint32_t KeyType_, uint32_t ValueType_)
+		: ContainerType(std::move(ContainerType_)), KeyType(std::move(KeyType_)), ValueType(std::move(ValueType_))
 	{
 
 	}
@@ -126,31 +133,13 @@ struct ErrorCode
 
 struct Overview
 {
-	UINT numMaxBolts = 0;
-	UINT numBolts = 0;
-	UINT numLooseBolts = 0;
-	UINT numInstalled = 0;
-	UINT numParts = 0;
-	UINT numFixed = 0;
-	UINT numLoose = 0;
-	UINT numStuck = 0;
-	UINT numDamaged = 0;
-};
-
-struct Position
-{
-	UINT index;
-	UINT position;
-
-	Position(UINT index_, UINT position_)
-		: index(std::move(index_)), position(std::move(position_))
-	{
-
-	}
-
-	inline 
-		friend bool operator <(const Position& x, const Position& y) 
-	{
-		return x.position < y.position;
-	}
+	uint32_t numMaxBolts = 0;
+	uint32_t numBolts = 0;
+	uint32_t numLooseBolts = 0;
+	uint32_t numInstalled = 0;
+	uint32_t numParts = 0;
+	uint32_t numFixed = 0;
+	uint32_t numLoose = 0;
+	uint32_t numStuck = 0;
+	uint32_t numDamaged = 0;
 };

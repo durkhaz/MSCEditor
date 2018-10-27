@@ -145,7 +145,7 @@ FindMetadataFromChildren( HWND hChildWnd, LPARAM lParam );
 //
 
 BOOL CALLBACK
-ResizeDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage)
+ResizeDialogProc(HWND hDlg, uint32_t uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage)
 {
 	PRESIZE_DIALOG_INFO DialogInfo;
 
@@ -347,7 +347,7 @@ FindMetadataFromChildren( HWND hChildWnd, LPARAM lParam )
 //
 
 LRESULT CALLBACK
-ResizeDialogDataWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lParam)
 {
 	PRESIZE_DIALOG_DATA_WINDOW_EXTRA ExtraData;
 
@@ -503,7 +503,7 @@ ProcessResizeOnChildren( HWND hChildWnd, LPARAM lParam )
 //
 
 LRESULT CALLBACK
-ResizeDialogControlWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lParam)
 {
 	HWND hWndParent = GetParent( hWnd );
 

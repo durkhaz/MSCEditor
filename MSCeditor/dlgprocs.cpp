@@ -1,8 +1,11 @@
 #include "dlgprocs.h"
 #include <CommCtrl.h>
-#define		WM_L2CONTEXTMENU	(WM_USER + 10)
-#define		WM_DRAWINFOICON		(WM_USER + 11)
-#define		WM_UPDATESIZE		(WM_USER + 12)
+
+#define		WM_L2CONTEXTMENU			(WM_USER + 10)
+#define		WM_DRAWINFOICON				(WM_USER + 11)
+#define		WM_UPDATESIZE				(WM_USER + 12)
+#define		WM_CONTAINERUPDATEINDECES	(WM_USER + 13)
+#define		WM_DESTROYBUTTONS			(WM_USER + 14)
 
 #define		STR_WEAR			_T("wear")
 #define		STR_STATE			_T("condition")
@@ -11,7 +14,7 @@
 #define		CLR_GOOD			RGB(153, 185, 152)
 #define		CLR_OK				RGB(253, 206, 170)
 #define		CLR_BAD				RGB(244, 131, 125)
-// Kinda messy to do this with CID ranges but it seemed easier at the time. I don't really feel like refactoring this now.
+
 #define		ID_PL_BASE_OFFSET	10000
 #define		ID_PL_DTXT			50000
 #define		ID_PL_STATE			60000
@@ -36,7 +39,17 @@ DLGTEMPLATEEX* DoLockDlgRes(LPCTSTR lpszResName)
 	return (DLGTEMPLATEEX *)LockResource(hglb);
 }
 
-inline void ShowBalloontip(HWND hwnd, UINT msgIndex)
+void AllocWindowUserData(HWND hwnd, LONG DefProc, uint32_t id = 0, COLORREF clr = RGB(255, 255, 255), uint32_t dat = 0)
+{
+	PLID *plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
+	plID->hDefProc = (WNDPROC)SetWindowLong(hwnd, GWL_WNDPROC, DefProc);
+	plID->cColor = clr;
+	plID->nPID = id;
+	plID->dat = dat;
+	SetWindowLong(hwnd, GWL_USERDATA, (LONG)plID);
+}
+
+inline void ShowBalloontip(HWND hwnd, uint32_t msgIndex)
 {
 	EDITBALLOONTIP ebt;
 	ebt.cbStruct = sizeof(EDITBALLOONTIP);
@@ -46,32 +59,39 @@ inline void ShowBalloontip(HWND hwnd, UINT msgIndex)
 	SendMessage(hwnd, EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 }
 
-bool CloseEditbox(HWND hwnd, HWND hOutput)
-{
-	int size = GetWindowTextLength(hwnd) + 1;
-	bool valid = TRUE;
-	std::wstring value(size - 1, '\0');
-	GetWindowText(hwnd, (LPWSTR)value.data(), size);
-	UINT type = variables[indextable[iItem].index2].type;
-	if (type == ID_FLOAT)
-	{
-		valid = IsValidFloatStr(value);
-		if (valid)
-			TruncFloatStr(value);
-	}
-	
-	valid ? UpdateValue(value, indextable[iItem].index2) : ShowBalloontip(hOutput, 8);
-	DestroyWindow(hwnd);
-	hEdit = NULL;
-	return TRUE;
-}
-
 inline std::wstring GetEditboxString(HWND hEdit)
 {
-	UINT size = GetWindowTextLength(hEdit);
+	uint32_t size = GetWindowTextLength(hEdit);
 	std::wstring str(size, '\0');
 	GetWindowText(hEdit, (LPWSTR)str.data(), size + 1);
 	return str;
+}
+
+bool CloseEditbox(HWND hwnd, HWND hOutput, bool bIgnoreContent = FALSE)
+{
+	// Setting this to 1 makes sure we won't execute twice. Losing focus on a window triggers twice sometimes for some godforsaken reason
+	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (plID)
+		plID->nPID = 1;
+
+	if (!bIgnoreContent)
+	{
+		bool valid = TRUE;
+		std::wstring value = GetEditboxString(hwnd);
+		auto type = variables[indextable[iItem].second].header.GetValueType();
+		if (type == EntryValue::Float)
+		{
+			valid = IsValidFloatStr(value);
+			if (valid)
+				TruncFloatStr(value);
+		}
+		valid ? UpdateValue(value, indextable[iItem].second) : ShowBalloontip(hOutput, 8);
+	}
+	DestroyWindow(GetDlgItem(GetParent(hwnd), IDC_BUTNEGINF));
+	DestroyWindow(GetDlgItem(GetParent(hwnd), IDC_BUTPOSINF));
+	DestroyWindow(hwnd);
+	hEdit = NULL;
+	return TRUE;
 }
 
 // Returns whether actions are required (for the fix button)
@@ -84,75 +104,96 @@ bool GetStateLabelSpecs(const CarProperty *cProp, std::wstring &sLabel, COLORREF
 	tColor = (COLORREF)GetSysColor(COLOR_WINDOW);
 	bool bActionAvailable = FALSE;
 
-	if (cProp->worst != -1.f)
+	switch (variables[cProp->index].header.GetValueType())
 	{
-		float fMin = std::min(cProp->worst, cProp->optimum);
-		float fMax = std::max(cProp->worst, cProp->optimum);
-		float fValue = BinToFloat(variables[cProp->index].value);
-
-		// If recommended is defined (not NAN), then we check if it's in range of min max
-		if (cProp->recommended == cProp->recommended)
+	case EntryValue::Vector3:
+	{
+		bActionAvailable = variables[cProp->index].value != cProp->recommendedBin;
+		sLabel += bActionAvailable ? STR_BAD : STR_GOOD;
+		tColor = bActionAvailable ? CLR_BAD : CLR_GOOD;
+		break;
+	}
+	case EntryValue::Float:
+	{
+		if (!cProp->worstBin.empty())
 		{
-			//if (std::abs(fValue - fMax) > kindasmall)
-			if (fValue > fMax + kindasmall || fValue < fMin - kindasmall)
+			float fMin = std::min(BinToFloat(cProp->worstBin), BinToFloat(cProp->optimumBin));
+			float fMax = std::max(BinToFloat(cProp->worstBin), BinToFloat(cProp->optimumBin));
+			float fValue = BinToFloat(variables[cProp->index].value);
+
+			// If recommended is defined (not empty), then we check if it's in range of min max
+			if (!cProp->recommendedBin.empty())
 			{
-				sLabel += STR_BAD;
-				tColor = CLR_BAD;
-				bActionAvailable = TRUE;
+				if (fValue > fMax + kindasmall || fValue < fMin - kindasmall)
+				{
+					sLabel += STR_BAD;
+					tColor = CLR_BAD;
+					bActionAvailable = TRUE;
+				}
+				else
+				{
+					sLabel += STR_GOOD;
+					tColor = CLR_GOOD;
+				}
 			}
+			// Otherwise we calculate percentage
 			else
+			{
+				fMax -= fMin;
+				fValue = std::max(fMin, std::min((fValue - fMin), fMax));
+				if (BinToFloat(cProp->worstBin) > BinToFloat(cProp->optimumBin))
+					fValue = BinToFloat(cProp->worstBin) - fValue;
+				int percentage = static_cast<int>((fValue / fMax) * 100);
+				sLabel += std::to_wstring(percentage);
+				sLabel += _T("%");
+				if (percentage < 100)
+					bActionAvailable = TRUE;
+				tColor = (percentage >= 75) ? CLR_GOOD : ((percentage < 15) ? CLR_BAD : CLR_OK);
+			}
+		}
+		else
+		{
+			float fDelta = std::abs(BinToFloat(cProp->optimumBin) - BinToFloat(variables[cProp->index].value));
+			if (fDelta <= kindasmall)
 			{
 				sLabel += STR_GOOD;
 				tColor = CLR_GOOD;
 			}
 		}
-		// Otherwise we calculate percentage
-		else
-		{
-			fMax -= fMin;
-			fValue = std::max(fMin, std::min((fValue - fMin), fMax));
-			if (cProp->worst > cProp->optimum)
-				fValue = cProp->worst - fValue;
-			int percentage = static_cast<int>((fValue / fMax) * 100);
-			sLabel += std::to_wstring(percentage);
-			sLabel += _T("%");
-			if (percentage < 100)
-				bActionAvailable = TRUE;
-			tColor = (percentage >= 75) ? CLR_GOOD : ((percentage < 15) ? CLR_BAD : CLR_OK);
-		}
+		break;
 	}
-	else
-	{
-		float fDelta = std::abs(cProp->optimum - BinToFloat(variables[cProp->index].value));
-		if (fDelta <= kindasmall)
-		{
-			sLabel += STR_GOOD;
-			tColor = CLR_GOOD;
-		}
 	}
+
 	sLabel += _T(" ");
 	return bActionAvailable;
 }
 
-void UpdateRow(HWND hwnd, UINT pIndex, int nRow, std::wstring str = _T(""))
+void UpdateRow(HWND hwnd, uint32_t pIndex, int nRow, std::wstring str = _T(""))
 {
 	std::wstring sValue = str;
-	bool bHasRecommended = carproperties[pIndex].recommended == carproperties[pIndex].recommended;
+	std::string binValue = "";
+	auto dataType = variables[carproperties[pIndex].index].header.GetValueType();
+	bool bHasRecommended = !carproperties[pIndex].recommendedBin.empty();
+
+	// If the change didn't come from the edit box, but from the fix button, str is empty
+	// Order of consideration: recommended > optimum
 	if (str.empty())
 	{
-		float fValue = bHasRecommended ? carproperties[pIndex].recommended : carproperties[pIndex].optimum;
-		sValue = std::to_wstring(fValue);
+		binValue = bHasRecommended ? carproperties[pIndex].recommendedBin : carproperties[pIndex].optimumBin;
+		sValue = Variable::ValueBinToStr(binValue, dataType);
 	}
-	else if (!bHasRecommended && (carproperties[pIndex].worst != -1 && carproperties[pIndex].optimum != -1))
+
+	// If we don't have a recommended value, and we have a range defined, we clamp
+	else if (!bHasRecommended && !carproperties[pIndex].worstBin.empty() && carproperties[pIndex].optimumBin.empty())
 	{
 		float fValue = static_cast<float>(::strtod(WStringToString(sValue).c_str(), NULL));
-		float fMin = std::min(carproperties[pIndex].worst, carproperties[pIndex].optimum);
-		float fMax = std::max(carproperties[pIndex].worst, carproperties[pIndex].optimum);
+		float fMin = std::min(BinToFloat(carproperties[pIndex].worstBin), BinToFloat(carproperties[pIndex].optimumBin));
+		float fMax = std::max(BinToFloat(carproperties[pIndex].worstBin), BinToFloat(carproperties[pIndex].optimumBin));
 		fValue = std::max(fMin, std::min((fValue - fMin), fMax));
 		sValue = std::to_wstring(fValue);
 	}
-	TruncFloatStr(sValue);
-	UpdateValue(sValue, carproperties[pIndex].index);
+	//TruncFloatStr(sValue);
+	UpdateValue(sValue, carproperties[pIndex].index, binValue);
 
 	// Update state label
 	HWND hLabel = GetDlgItem(hwnd, ID_PL_STATE + nRow);
@@ -165,6 +206,7 @@ void UpdateRow(HWND hwnd, UINT pIndex, int nRow, std::wstring str = _T(""))
 		plID->cColor = labelclr;
 	ClearStatic(hLabel, hwnd);
 
+	// Check if the change made an actions available
 	HWND hFixButton = GetDlgItem(hwnd, ID_PL_BUTTON + nRow);
 	if (bActionAvailable)
 	{
@@ -186,7 +228,7 @@ void UpdateRow(HWND hwnd, UINT pIndex, int nRow, std::wstring str = _T(""))
 			StaticRekt.right -= StaticRekt.left;
 
 			hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, StaticRekt.left + StaticRekt.right + 16, StaticRekt.top, 20, StaticRekt.bottom, hwnd, (HMENU)(ID_PL_BUTTON + nRow), hInst, NULL);
-			SendMessage(hFixButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+			SendMessage(hFixButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 		}
 	}
 	else if (hFixButton != NULL)
@@ -201,7 +243,7 @@ void UpdateRow(HWND hwnd, UINT pIndex, int nRow, std::wstring str = _T(""))
 // dlg procs
 // ======================
 
-BOOL CALLBACK AboutProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK AboutProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -229,7 +271,7 @@ BOOL CALLBACK AboutProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-BOOL CALLBACK HelpProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK HelpProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -276,7 +318,194 @@ BOOL CALLBACK HelpProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+{
+	static const std::vector<std::wstring> weathertypes = { L"Clear Sky", L"Overcast", L"Rainy", L"Thunderstorm" };
+	static const std::wstring worldtime =		L"worldtime";
+	static const std::wstring worldday =		L"worldday";
+	static const std::wstring weathercloud =	L"weathercloudid";
+	static const std::wstring weatherpos =		L"weatherpos";
+	static const std::wstring weathertype =		L"weathertype";
+	static const int cloudtypes[] = { 4, 1, 2 };
+
+	switch (Message)
+	{
+	case WM_INITDIALOG:
+	{
+		// Timetable
+		{
+			const HWND hTimetable = GetDlgItem(hwnd, IDC_TTIMETABLE);
+			ListView_SetExtendedListViewStyle(hTimetable, LVS_EX_GRIDLINES);
+
+			RECT rekt;
+			GetWindowRect(hTimetable, &rekt);
+			const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
+
+			// Column headers
+			LVCOLUMN lvc;
+			lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+			lvc.iSubItem = 2; lvc.pszText = _T("Event"); lvc.cx = width - 140; lvc.fmt = LVCFMT_LEFT;
+			SendMessage(hTimetable, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+			lvc.iSubItem = 1; lvc.pszText = _T("Day"); lvc.cx = 70;
+			SendMessage(hTimetable, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+			lvc.iSubItem = 0; lvc.pszText = _T("Time"); lvc.cx = 70;
+			SendMessage(hTimetable, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+
+			// Entries
+			int item = 0;
+			for (auto& entry : timetableEntries)
+			{
+				LVITEM lvi;
+				lvi.mask = LVIF_TEXT | LVIF_STATE | LVIF_PARAM; lvi.state = 0; lvi.stateMask = 0;
+				lvi.iItem = item; lvi.iSubItem = 0; lvi.pszText = (LPWSTR)entry.time.c_str(), lvi.lParam = 0;
+				SendMessage(hTimetable, LVM_INSERTITEM, 0, (LPARAM)&lvi);
+
+				lvi.mask = LVIF_TEXT | LVIF_STATE; lvi.state = 0; lvi.stateMask = 0;
+				lvi.iItem = item; lvi.iSubItem = 1; lvi.pszText = (LPWSTR)entry.day.c_str();
+				SendMessage(hTimetable, LVM_SETITEM, 0, (LPARAM)&lvi);
+
+				lvi.iItem = item; lvi.iSubItem = 2; lvi.pszText = (LPWSTR)entry.name.c_str();
+				SendMessage(hTimetable, LVM_SETITEM, 0, (LPARAM)&lvi);
+				item++;
+			}
+		}
+		// Time dropdown menu
+		{
+			const HWND hTime = GetDlgItem(hwnd, IDC_TTIME);
+			const int EntryIndex = EntryExists(worldtime);
+
+			if (EntryIndex < 0)
+				::EnableWindow(hTime, FALSE);
+			else
+			{
+				const int fuck = *(int*)(variables[EntryIndex].value.data()) + 2;
+				const int worldtime = fuck > 24 ? 2 : fuck;
+				int time = 2;
+				while (time <= 24)
+				{
+					std::wstring timeStr = std::to_wstring(time);
+					SendMessage(hTime, (uint32_t)CB_ADDSTRING, 0, (LPARAM)timeStr.c_str());
+
+					// Set current time
+					if (std::abs((float)(worldtime - time) - kindasmall) < 1.f)
+						SendMessage(hTime, CB_SETCURSEL, (time - 2) / 2, 0);
+
+					time = time + 2;
+				}
+			}
+		}
+		// Day dropdown menu
+		{
+			const HWND hDay = GetDlgItem(hwnd, IDC_TDAY);
+			const int EntryIndex = EntryExists(worldday);
+
+			if (EntryIndex < 0)
+				::EnableWindow(hDay, FALSE);
+			else
+			{
+				const int worldday = *(int*)(variables[EntryIndex].value.data()) - 1;
+				int entry = 0;
+				for (auto& day : { L"Monday", L"Tuesday", L"Wednesday", L"Thursday", L"Friday", L"Saturday", L"Sunday" })
+				{
+					SendMessage(hDay, (uint32_t)CB_ADDSTRING, 0, (LPARAM)day);
+					// Set current day
+					if (worldday == entry)
+						SendMessage(hDay, CB_SETCURSEL, entry, 0);
+					entry++;
+				}
+			}
+		}
+		// Weather dropdown menu
+		{
+			const HWND hWeather = GetDlgItem(hwnd, IDC_TWEATHER);
+			const int WeatherCloudEntry = EntryExists(weathercloud);
+			const int WeatherPosEntry = EntryExists(weatherpos);
+			const int WeatherTypeEntry = EntryExists(weathertype);
+			if (WeatherCloudEntry < 0 || WeatherPosEntry < 0 || WeatherTypeEntry < 0)
+				::EnableWindow(hWeather, FALSE);
+			else
+			{
+				for (auto& weather : weathertypes)
+				{
+					SendMessage(hWeather, (uint32_t)CB_ADDSTRING, 0, (LPARAM)weather.c_str());
+				}
+			}
+		}
+		break;
+	}
+	case WM_COMMAND:
+	{
+		switch (LOWORD(wParam))
+		{
+		case IDC_APPLY:
+		{
+			// Time
+			{
+				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TTIME), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				if (sel != CB_ERR)
+				{
+					int time = (sel + 1) * 2 - 2;
+					UpdateValue(L"", EntryExists(worldtime), IntToBin(time = 0 ? 24 : time));
+				}
+			}
+			// Day
+			{
+				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TDAY), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				if (sel != CB_ERR)
+					UpdateValue(L"", EntryExists(worldday), IntToBin(sel + 1));
+			}
+			// Weather
+			{
+				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TWEATHER), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0); // 0: clear, 1: overcast, 2: rainy, 3: thunderstorm
+
+				// Clear Sky
+				if (sel == 0) 
+				{
+					// Move clouds off the map
+					int PosIndex = EntryExists(weatherpos);
+					std::string tval = variables[PosIndex].value;
+					tval.replace(1, 4, FloatToBin(17000.f));
+					UpdateValue(L"", PosIndex, tval);
+
+					// Set clouds to clear
+					UpdateValue(L"", EntryExists(weathertype), IntToBin(0));
+				}
+				// Not clear sky
+				else if (sel > 0)
+				{
+					// Center clouds on player
+					int PosIndex = EntryExists(weatherpos);
+					int PlayerIndex = EntryExists(L"player");
+
+					std::string tval = variables[PosIndex].value;
+					tval.replace(1, 4, FloatToBin(PlayerIndex >= 0 ? BinToFloat(variables[PlayerIndex].value.substr(1, 4)) : 0.f));
+					tval.replace(9, 4, FloatToBin(PlayerIndex >= 0 ? BinToFloat(variables[PlayerIndex].value.substr(9, 4)) : 0.f));
+					UpdateValue(L"", PosIndex, tval);
+
+					// Set weather appropiately
+					UpdateValue(L"", EntryExists(weathertype), IntToBin(sel - 1)); // 0: dry, 1: rain, 2: thunder
+
+					// Set cloud type
+					UpdateValue(L"", EntryExists(weathercloud), IntToBin(cloudtypes[sel - 1]));
+				}
+			}
+			// leak into DISCARD
+		}
+		case IDC_DISCARD:
+		{
+			EndDialog(hwnd, 0);
+			DestroyWindow(hwnd);
+			break;
+		}
+		}
+	}
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL ReportBoltsProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -296,110 +525,16 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 		lvc.iSubItem = 0; lvc.pszText = _T("Carpart"); lvc.cx = 120;
 		SendMessage(hList3, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
 
-		UINT item = 0;
+		uint32_t item = 0;
 		Overview ov;
 
 		SendMessage(hList3, WM_SETREDRAW, 0, 0);
 
-		if (!carparts.empty())
-		{
-			for (UINT i = 0; i < carparts.size(); i++)
-			{
-				PopulateBList(hwnd, &carparts[i], item, &ov);
-			}
-		}
-		else
-		{
-			for (UINT i = 0; i < variables.size(); i++)
-			{
-				std::wstring prefix;
-				if (ContainsStr(variables[i].key, partIdentifiers[3])) // Contains installed?
-				{
-					prefix = variables[i].key;
-					prefix.resize(prefix.size() - partIdentifiers[3].size());
-				}
-				else if (ContainsStr(variables[i].key, partIdentifiers[1])) // Contains bolts?
-				{
-					bool valid = TRUE;
-					prefix = variables[i].key;
-					prefix.resize(prefix.size() - partIdentifiers[1].size());
+		// Re-Populate carparts, just in case
+		PopulateCarparts();
+		for (uint32_t i = 0; i < carparts.size(); i++)
+			PopulateBList(hwnd, &carparts[i], item, &ov);
 
-					std::wstring _strInstalled = prefix + partIdentifiers[3];	
-					for (UINT j = 0; j < variables.size(); j++)
-					{
-						if (variables[j].key == _strInstalled)
-						{
-							valid = FALSE;
-							break;
-						}
-					}
-
-					if (!valid)
-					{
-						prefix.clear();
-					}
-				}
-
-				if (!prefix.empty())
-				{
-
-					//filter out special cases
-					bool valid = TRUE;
-					if (!partSCs.empty())
-					{
-						for (UINT j = 0; j < partSCs.size(); j++)
-						{
-							if (partSCs[j].id == 2)
-							{
-								if (partSCs[j].str == prefix)
-								{
-									valid = FALSE;
-									break;
-								}
-							}
-						}
-					}
-
-					if (valid)
-					{
-						CarPart part;
-
-						std::wstring _str1 = prefix + partIdentifiers[3];
-						std::wstring _str2 = prefix + partIdentifiers[1];
-						std::wstring _str3 = prefix + partIdentifiers[4];
-						std::wstring _str4 = prefix + partIdentifiers[2];
-						std::wstring _str5 = prefix + partIdentifiers[0];
-						std::wstring _str6 = prefix + partIdentifiers[5];
-
-						for (UINT j = 0; j < variables.size(); j++)
-						{
-							if (variables[j].key == _str1)
-								part.iInstalled = j;
-
-							else if (variables[j].key == _str2)
-								part.iBolts = j;
-
-							else if (variables[j].key == _str3)
-								part.iTightness = j;
-
-							else if (variables[j].key == _str4)
-								part.iDamaged = j;
-
-							else if (variables[j].key == _str5)
-								part.iBolted = j;
-
-							else if (variables[j].key == _str6)
-								part.iCorner = j;
-						}
-						part.name = prefix;
-
-						carparts.push_back(part);
-
-						PopulateBList(hwnd, &part, item, &ov);
-					}
-				}
-			}
-		}
 		// Draw list
 		SendMessage(hList3, WM_SETREDRAW, 1, 0);
 
@@ -452,14 +587,19 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				UpdateBDialog(hwnd);
 			}
 			break;
-		case IDC_BBUT4:
+		case IDC_BBUT4: 
+		{
 			// Repair bodywork
-			if (!carparts.empty())
+			const std::wstring filename = L"meshsave.txt";
+
+			std::wstring buffer(512, '\0');
+			buffer.resize(swprintf(&buffer[0], 512, GLOB_STRS[48].c_str(), filename.c_str()));
+			if (MessageBox(NULL, buffer.c_str(), ErrorTitle.c_str(), MB_YESNO | MB_ICONINFORMATION) == IDYES)
 			{
 				std::size_t found = filepath.find_last_of(L"\\");
 				if (found != std::string::npos && ContainsStr(filepath, L"Amistech"))
 				{
-					std::wstring meshsavepath = filepath.substr(0, found + 1) + L"meshsave.txt";
+					std::wstring meshsavepath = filepath.substr(0, found + 1) + filename;
 					if (DeleteFile(meshsavepath.c_str()) == 0)
 						MessageBox(hwnd, GLOB_STRS[46].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					else
@@ -467,6 +607,7 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				}
 			}
 			break;
+		}
 		case IDC_BBUT3:
 			// Fix stuck parts
 			if (!carparts.empty())
@@ -500,25 +641,8 @@ BOOL ReportBoltsProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-/*
-LRESULT CALLBACK PropertyListEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
-	if (plID == nullptr)
-		return FALSE;
-
-	else if (message == WM_DESTROY)
-	{
-		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-		plID = nullptr;
-		return TRUE;
-	}
-	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
-}
-*/
-
 // Some controls inside the property list allocated some data on the heap, so we need to clean it up upon destroying
-LRESULT CALLBACK PropertyListControlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK PropertyListControlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
 	if (plID == nullptr)
@@ -533,11 +657,11 @@ LRESULT CALLBACK PropertyListControlProc(HWND hwnd, UINT message, WPARAM wParam,
 	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
 }
 
-BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static int s_scrollYdelta = 0;
 	static HBRUSH s_backgroundBrush;
-	static UINT initial_size;
+	static uint32_t initial_size;
 
 	switch (Message)
 	{
@@ -622,8 +746,6 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 
 		s_scrollYdelta = si.nPos - scrollY;
 
-		//std::wcout << L"Pos: " << si.nPos << L" Trackpos: " << si.nTrackPos << L" ScrollY: " << scrollY << L" Max: " << si.nMax << L" Page: " << si.nPage << std::endl;
-
 		ScrollWindowEx(hwnd, 0, s_scrollYdelta, NULL, NULL, NULL, NULL, SW_SCROLLCHILDREN | SW_ERASE | SW_INVALIDATE);
 		SetScrollPos(hwnd, SB_VERT, scrollY, TRUE);
 
@@ -683,8 +805,8 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 	case WM_LBUTTONDOWN:
 	{
 		POINT clkloc;
-		clkloc.x = LOWORD(lParam);
-		clkloc.y = HIWORD(lParam);
+		clkloc.x = GET_X_LPARAM(lParam);
+		clkloc.y = GET_Y_LPARAM(lParam);
 		HWND hClickedWindow = ChildWindowFromPoint(hwnd, clkloc);
 		HWND hEditValue = GetDlgItem(hwnd, IDC_PLEDIT);
 		if (hEditValue != NULL)
@@ -704,28 +826,21 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 
 			StaticRekt.top -= 2;
 			StaticRekt.left -= 2;
-			StaticRekt.bottom -= 2;
-			StaticRekt.right -= 2;
-
-			StaticRekt.bottom -= StaticRekt.top;
-			StaticRekt.right -= StaticRekt.left;
+			StaticRekt.bottom -= 2 + StaticRekt.top;
+			StaticRekt.right -= 2 + StaticRekt.left;
 
 			// Fetch the value and create edit-box
-			std::wstring vStr;
-			FormatString(vStr, variables[carproperties[pIndex].index].value, ID_FLOAT);
+			std::wstring vStr = variables[carproperties[pIndex].index].GetDisplayString();
 			hEditValue = CreateWindowEx(WS_EX_CLIENTEDGE, WC_EDIT, vStr.c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, StaticRekt.left, StaticRekt.top, StaticRekt.right, StaticRekt.bottom, hwnd, (HMENU)IDC_PLEDIT, hInst, NULL);
-			SendMessage(hEditValue, WM_SETFONT, (WPARAM)hFont, TRUE);
+			SendMessage(hEditValue, WM_SETFONT, (WPARAM)hListFont, TRUE);
 			SendMessage(hEditValue, EM_SETLIMITTEXT, 16, 0);
 
 			// Alloc memory on heap to store edit controls property ID and default window process
-			plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
-			plID->hDefProc = (WNDPROC)SetWindowLong(hEditValue, GWL_WNDPROC, (LONG)PropertyListControlProc);
-			plID->nPID = (cID - ID_PL_EDIT); // We don't put the index here, because we can just get the index from the row
-			SetWindowLong(hEditValue, GWL_USERDATA, (LONG)plID);
+			AllocWindowUserData(hEditValue, (LONG)PropertyListControlProc, cID - ID_PL_EDIT /* We don't put the index here, because we can just get the index from the row*/);
 
 			// Create apply button
 			HWND hApplyButton = CreateWindowEx(0, WC_BUTTON, _T("set"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, StaticRekt.left + StaticRekt.right + 16, StaticRekt.top, 35, StaticRekt.bottom, hwnd, (HMENU)IDC_PLSET, hInst, NULL);
-			SendMessage(hApplyButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+			SendMessage(hApplyButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 			// Hide fix button if it's present
 			HWND hFixButton = GetDlgItem(hwnd, ID_PL_BUTTON + (cID - ID_PL_EDIT));
@@ -747,14 +862,14 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lP
 	return TRUE;
 }
 
-BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
 	case WM_INITDIALOG:
 	{
 		// Create the child list
-		int ListWidth = 380;
+		const int ListWidth = 380;
 		HWND hProperties = CreateDialog(hInst, MAKEINTRESOURCE(IDD_PROPERTYLIST), hwnd, PropertyListProc);
 		ShowWindow(hProperties, SW_SHOW);
 		SetWindowPos(hProperties, NULL, 12, 13, ListWidth, 423, SWP_SHOWWINDOW);
@@ -767,27 +882,27 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 		int dtLeft = ListWidth + sbSize + 12;
 
 		HWND hDescriptionText = CreateWindowEx(0, WC_STATIC, GLOB_STRS[45].c_str(), WS_CHILD | WS_VISIBLE, dtLeft, 13, dlgSize - dtLeft - 13, 423, hwnd, NULL, hInst, NULL);
-		SendMessage(hDescriptionText, WM_SETFONT, (WPARAM)hFont, TRUE);
+		SendMessage(hDescriptionText, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 		// Don't do anything if we don't have anything loaded
 		if (variables.size() == 0)
 			break;
 
 		// Process the carproperty vector
-		UINT initial_size = carproperties.size();
-		for (UINT i = 0; i < variables.size(); i++)
+		uint32_t initial_size = carproperties.size();
+		for (uint32_t i = 0; i < variables.size(); i++)
 		{
 			// Here we set indices of elements read in from the datafile for faster lookup later
-			for (UINT j = 0; j < carproperties.size(); j++)
+			for (uint32_t j = 0; j < carproperties.size(); j++)
 			{
 				// If bool is > 1 then it's a wildcard, which we're not going to assign an index to directly
 				BOOL IdentifiersEqual = CompareStrsWithWildcard(variables[i].key, carproperties[j].lookupname);
 				if (IdentifiersEqual > 0)
 				{
-					bool bRelevant = carparts.empty();
-					if (!bRelevant)
+					bool bRelevant = TRUE;
+					if (!carparts.empty())
 					{
-						for (UINT k = 0; k < carparts.size(); k++)
+						for (uint32_t k = 0; k < carparts.size(); k++)
 						{
 							if (StartsWithStr(variables[i].key, carparts[k].name) && carparts[k].iInstalled != UINT_MAX)
 							{
@@ -799,7 +914,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 					if (bRelevant)
 					{
 						if (IdentifiersEqual == 2)
-							carproperties.push_back(CarProperty(carproperties[j].displayname, variables[i].key, carproperties[j].worst, carproperties[j].optimum, carproperties[j].recommended, i));
+							carproperties.push_back(CarProperty(carproperties[j].displayname, variables[i].key, carproperties[j].datatype ,carproperties[j].worstBin, carproperties[j].optimumBin, carproperties[j].recommendedBin, i));
 						else
 							carproperties[j].index = i;
 					}
@@ -808,10 +923,10 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 			}
 
 			// Now we add elements that contain wear in their key to the property-list
-			if (ContainsStr(variables[i].key, STR_WEAR) && variables[i].type == ID_FLOAT)
+			if (ContainsStr(variables[i].key, STR_WEAR) && variables[i].header.IsNonContainerOfValueType(EntryValue::Float) || variables[i].header.IsNonContainerOfValueType(EntryValue::Vector3))
 			{
 				bool bAlreadyExists = FALSE;
-				for (UINT j = 0; j < initial_size; j++)
+				for (uint32_t j = 0; j < initial_size; j++)
 				{
 					if (CompareStrsWithWildcard(variables[i].key, carproperties[j].lookupname))
 					{
@@ -821,7 +936,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 				}
 				// If we have no defined carparts, we just assume everything is installed and display everything
 				bool bIsInstalled = carparts.empty();
-				for (UINT j = 0; ; j++)
+				for (uint32_t j = 0; ; j++)
 				{
 					if (j >= carparts.size() || bIsInstalled)
 					{
@@ -846,14 +961,14 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 				{
 					// Build display string
 					std::wstring displayname = variables[i].key;
-					std::size_t pos1 = displayname.find(STR_WEAR);
+					std::size_t pos1 = variables[i].key.find(STR_WEAR);
 					if (pos1 != std::wstring::npos)
 					{
 						displayname.replace(pos1, 4, _T(""));
 						displayname += _T(" ");
 						displayname += STR_STATE;
 						std::transform(displayname.begin(), displayname.begin() + 1, displayname.begin(), ::toupper);
-						CarProperty cp = CarProperty(displayname, _T(""), 0.f, 100.f);
+						CarProperty cp = CarProperty(displayname, L"", EntryValue::Float, FloatToBin(0), FloatToBin(100)); 
 						cp.index = i;
 						carproperties.push_back(cp);
 					}
@@ -870,7 +985,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 		int RowID = 0;
 
 		// For every entry in carproperties we add a row
-		for (UINT i = 0; i < carproperties.size(); i++)
+		for (uint32_t i = 0; i < carproperties.size(); i++)
 		{
 			// But make sure it has an index set, otherwise it doesn't exist in the variable vector
 			if (carproperties[i].index != UINT_MAX)
@@ -880,34 +995,28 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 				COLORREF tColor;
 				bool bActionAvailable;
 
-				HWND DisplayText = CreateWindowEx(0, WC_STATIC, carproperties[i].displayname.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hProperties, (HMENU)ID_PL_DTXT + RowID, hInst, NULL);
-				SendMessage(DisplayText, WM_SETFONT, (WPARAM)hFont, TRUE);
+				HWND hDisplayText = CreateWindowEx(0, WC_STATIC, carproperties[i].displayname.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hProperties, (HMENU)ID_PL_DTXT + RowID, hInst, NULL);
+				SendMessage(hDisplayText, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				bActionAvailable = GetStateLabelSpecs(&carproperties[i], value, tColor);
 
-				HWND DisplayState = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 162, 0 + offset, 40, yChar + 1, hProperties, (HMENU)(ID_PL_STATE + RowID) , hInst, NULL);
-				SendMessage(DisplayState, WM_SETFONT, (WPARAM)hFont, TRUE);
+				HWND hDisplayState = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 162, 0 + offset, 40, yChar + 1, hProperties, (HMENU)(ID_PL_STATE + RowID) , hInst, NULL);
+				SendMessage(hDisplayState, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store state's color and default window process
-				PLID *plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
-				plID->hDefProc = (WNDPROC)SetWindowLong(DisplayState, GWL_WNDPROC, (LONG)PropertyListControlProc);
-				plID->cColor = tColor;
-				SetWindowLong(DisplayState, GWL_USERDATA, (LONG)plID);
+				AllocWindowUserData(hDisplayState, (LONG)PropertyListControlProc, 0, tColor);
 
-				FormatString(value, variables[carproperties[i].index].value, ID_FLOAT);
-				HWND DisplayValue = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 210, 0 + offset, 100, yChar + 1, hProperties, (HMENU)(ID_PL_EDIT + RowID), hInst, NULL);
-				SendMessage(DisplayValue, WM_SETFONT, (WPARAM)hFont, TRUE);
+				value = variables[carproperties[i].index].GetDisplayString();
+				HWND hDisplayValue = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 210, 0 + offset, 100, yChar + 1, hProperties, (HMENU)(ID_PL_EDIT + RowID), hInst, NULL);
+				SendMessage(hDisplayValue, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store DisplayValues property ID and default window process (ID needed by fix button)
-				plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
-				plID->hDefProc = (WNDPROC)SetWindowLong(DisplayValue, GWL_WNDPROC, (LONG)PropertyListControlProc);
-				plID->nPID = i;
-				SetWindowLong(DisplayValue, GWL_USERDATA, (LONG)plID);
+				AllocWindowUserData(hDisplayValue, (LONG)PropertyListControlProc, i, tColor);
 
 				if (bActionAvailable)
 				{
-					HWND FixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 324, 0 + offset - 2, 20, yChar + 1, hProperties, (HMENU)(ID_PL_BUTTON + RowID), hInst, NULL);
-					SendMessage(FixButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+					HWND hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 324, 0 + offset - 2, 20, yChar + 1, hProperties, (HMENU)(ID_PL_BUTTON + RowID), hInst, NULL);
+					SendMessage(hFixButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 				}
 				RowID += 1;
 				offset += yChar;
@@ -931,7 +1040,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 	return TRUE;
 }
 
-BOOL CALLBACK ReportChildrenProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK ReportChildrenProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	// Get the index of the selected tab to determine which child proc will be executed
 	HWND hwndParent = GetParent(hwnd);
@@ -948,23 +1057,29 @@ BOOL CALLBACK ReportChildrenProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM 
 	return iSel == 0 ? ReportBoltsProc(hwnd, Message, wParam, lParam) : ReportMaintenanceProc(hwnd, Message, wParam, lParam);
 }
 
-BOOL CALLBACK TeleportProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
+	static std::vector<uint32_t> vfrom;
+	static std::vector<std::pair<uint32_t, uint32_t>> vto;
+
 	switch (Message)
 	{
 	case WM_INITDIALOG:
 	{
-		for (UINT i = 0; i < locations.size(); i++)
+		for (uint32_t i = 0; i < locations.size(); i++)
 		{
-			SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_ADDSTRING, 0, (LPARAM)locations[i].badstring.c_str());
+			SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.c_str());
+			vto.push_back(std::pair<uint32_t, uint32_t>(0, i));
 		}
 
-		for (UINT i = 0; i < variables.size(); i++)
+		for (uint32_t i = 0; i < variables.size(); i++)
 		{
-			if (variables[i].type == ID_TRANSFORM)
+			if (variables[i].header.IsNonContainerOfValueType(EntryValue::Transform))
 			{
-				SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (UINT)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
-				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
+				SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
+				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
+				vto.push_back(std::pair<uint32_t, uint32_t>(1, i));
+				vfrom.push_back(i);
 			}
 		}
 
@@ -979,169 +1094,122 @@ BOOL CALLBACK TeleportProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam
 	{
 		switch (LOWORD(wParam))
 		{
-		case IDC_APPLY:
-		{
-			int oSize = GetWindowTextLength(GetDlgItem(hwnd, IDC_OFFSET)) + 1;
-			std::wstring offsetStr(oSize - 1, '\0');
-			GetWindowText(GetDlgItem(hwnd, IDC_OFFSET), (LPWSTR)offsetStr.data(), oSize);
-			if (!IsValidFloatStr(offsetStr))
-				offsetStr = L"0";
-			else
-				TruncFloatStr(offsetStr);
-			float offset = static_cast<float>(::strtod((WStringToString(offsetStr)).c_str(), NULL));
-
-			UINT index = SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-			UINT index_from = 0;
-			std::string bin;
-			for (UINT i = 0; i < variables.size(); i++)
-			{
-				if (variables[i].type == ID_TRANSFORM)
-				{
-					if (index_from == index)
-					{
-						index_from = i;
-						break;
-					}
-
-					index_from++;
-				}
-			}
-			index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-			UINT index_to = 0;
-
-			if (index < locations.size())
-			{
-				bin = WStringToString(locations[index].newstring) + variables[index_from].value.substr(40);
-				if (IsDlgButtonChecked(hwnd, IDC_TELEC) == BST_CHECKED)
-					bin = bin.substr(0, 12) + variables[index_from].value.substr(12);
-			}
-			else
-			{
-				for (UINT i = 0; i < variables.size(); i++)
-				{
-					if (variables[i].type == ID_TRANSFORM)
-					{
-						if (index_to == index - locations.size())
-						{
-							index_to = i;
-							break;
-						}
-						index_to++;
-					}
-				}
-				bin = variables[index_from].value;
-				int len = IsDlgButtonChecked(hwnd, IDC_TELEC) == BST_CHECKED ? 12 : 40;
-				bin.replace(0, len, variables[index_to].value.substr(0, len));
-			}
-			if (offset != 0)
-			{
-				float height = BinToFloat((bin.substr(4, 4))) + offset;
-				bin.replace(4, 4, FloatStrToBin(std::to_string(height)));
-			}
-			
-			UpdateValue(_T(""), index_from, bin);
-
-			EndDialog(hwnd, 0);
-			DestroyWindow(hwnd);
-			break;
-		}
-
-		case IDC_DISCARD:
-			EndDialog(hwnd, 0);
-			DestroyWindow(hwnd);
-
-			break;
-
 		case IDC_LOCFROM:
 			if (HIWORD(wParam) == CBN_SELCHANGE)
-			{
-				if (SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1) ::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
-			}
+				if (SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
+					::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
 			break;
-
 		case IDC_LOCTO:
 			if (HIWORD(wParam) == CBN_SELCHANGE)
-			{
-				if (SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1) ::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
-			}
+				if (SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
+					::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
+			break;
+		case IDC_APPLY:
+		{
+			// Get height offset
+			std::wstring offsetStr = GetEditboxString(GetDlgItem(hwnd, IDC_OFFSET));
+			float offset = IsValidFloatStr(offsetStr) ? static_cast<float>(::strtod((WStringToString(*TruncFloatStr(offsetStr))).c_str(), NULL)) : 0;
+
+			// Get binary of teleportation target transform
+			uint32_t index = SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			uint32_t varindex = vfrom[index];
+			std::string binfrom = variables[varindex].value;
+
+			// Get binary of teleportation destination transform
+			index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			bool bIsFileLocation = vto[index].first == 0;
+			std::string binto = bIsFileLocation ? locations[vto[index].second].second : variables[vto[index].second].value;
+
+			// Add height offset if it has any
+			if (offset > 0)
+				binto.replace(5, 4, FloatToBin(BinToFloat((binto.substr(5, 4))) + offset));
+
+			// Keep original rotation if desired
+			int len = IsDlgButtonChecked(hwnd, IDC_TELEC) == BST_CHECKED ? 13 : 41;
+
+			// Overwrite target transform binary with portion of destination transform
+			binfrom.replace(0, len, binto.substr(0, len));
+
+			UpdateValue(_T(""), varindex, binfrom);
+			// Leak into Discard
+		}
+		case IDC_DISCARD:
+		{
+			EndDialog(hwnd, 0);
+			DestroyWindow(hwnd);
 			break;
 		}
+		}
+		break;
 	}
-
+	case WM_DESTROY:
+	{
+		vfrom.clear();
+		vto.clear();
+		break;
+	}
 	default:
 		return FALSE;
 	}
 	return TRUE;
 }
 
-BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
 	case WM_INITDIALOG:
 	{
-		hTransform = hwnd;
-
-		UINT type = variables[indextable[iItem].index2].type;
-		if (type != ID_TRANSFORM)
-		{
-			//something went seriously wrong here
-			EndDialog(hwnd, 0);
-			DestroyWindow(hwnd);
-			EnableWindow(hDialog, TRUE);
-			break;
-		}
-
-		std::string value = variables[indextable[iItem].index2].value;
+		std::string value = variables[indextable[iItem].second].value.substr(1);
 
 		//location 
 
 		std::wstring str = BinToFloatVector(value, 3);
-		SendMessage((GetDlgItem(hTransform, IDC_LOC)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+		SendMessage((GetDlgItem(hwnd, IDC_LOC)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 
 		//rotation
 
 		if (!bEulerAngles)
 		{
 			str = BinToFloatVector(value, 4, 3);
-			SendMessage((GetDlgItem(hTransform, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[27].c_str());
+			SendMessage((GetDlgItem(hwnd, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[27].c_str());
 		}
 		else
 		{
+			str.clear();
 			QTRN q;
 			ANGLES a;
+
 			q.x = BinToFloat(value.substr(12 + 0, 4));
 			q.y = BinToFloat(value.substr(12 + 4, 4));
 			q.z = BinToFloat(value.substr(12 + 8, 4));
 			q.w = BinToFloat(value.substr(12 + 12, 4));
 			a = QuatToEuler(&q);
-			double list[] = { a.yaw, a.pitch, a.roll };
 
-			for (UINT i = 0; i < 3; i++)
+			for (auto& elem : { a.x, a.y, a.z })
 			{
-				std::wstring tstr = std::to_wstring(list[i]);
-				TruncFloatStr(tstr);
-				str += (tstr + (L", "));
+				std::wstring tstr = std::to_wstring(elem);
+				str += (*TruncFloatStr(tstr) + (L", "));
 			}
 			str.resize(str.size() - 2);
-			SendMessage((GetDlgItem(hTransform, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[28].c_str());
+			SendMessage((GetDlgItem(hwnd, IDC_ROTBOX)), WM_SETTEXT, 0, (LPARAM)GLOB_STRS[28].c_str());
 		}
-		SendMessage((GetDlgItem(hTransform, IDC_ROT)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+		SendMessage((GetDlgItem(hwnd, IDC_ROT)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 
 		//scale
 		str = BinToFloatVector(value, 3, 7);
-		SendMessage((GetDlgItem(hTransform, IDC_SCA)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+		SendMessage((GetDlgItem(hwnd, IDC_SCA)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 
 		//MSC dev requested removal of scale property
 		if (!bAllowScale)
-			::EnableWindow(GetDlgItem(hTransform, IDC_SCA), FALSE);
+			::EnableWindow(GetDlgItem(hwnd, IDC_SCA), FALSE);
 
 		//tag
 		if (value.size() > 40)
 		{
-			str = StringToWString(value.substr(41));
-			SendMessage((GetDlgItem(hTransform, IDC_TAG)), WM_SETTEXT, 0, (LPARAM)str.c_str());
-			SendMessage((GetDlgItem(hTransform, IDC_TAG)), EM_SETLIMITTEXT, 255, 0);
+			str = BinStrToWStr(value.substr(40));
+			SendMessage((GetDlgItem(hwnd, IDC_TAG)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+			SendMessage((GetDlgItem(hwnd, IDC_TAG)), EM_SETLIMITTEXT, 255, 0);
 		}
 
 		break;
@@ -1155,10 +1223,10 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 			{
 			case IDC_APPLY:
 			{
-				UINT error;
+				uint32_t error;
 				bool valid = TRUE;
 				std::wstring value;
-				std::string bin;
+				std::string bin(1, char(4));
 
 				EDITBALLOONTIP ebt;
 				ebt.cbStruct = sizeof(EDITBALLOONTIP);
@@ -1166,18 +1234,18 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 				ebt.ttiIcon = TTI_ERROR_LARGE;
 
 				//location
-				std::wstring lvalue = GetEditboxString(GetDlgItem(hTransform, IDC_LOC));
+				std::wstring lvalue = GetEditboxString(GetDlgItem(hwnd, IDC_LOC));
 
 				error = VectorStrToBin(lvalue, 3, bin);
 				if (error > 0)
 				{
 					valid = FALSE;
 					ebt.pszText = GLOB_STRS[error].c_str();
-					SendMessage(GetDlgItem(hTransform, IDC_LOC), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+					SendMessage(GetDlgItem(hwnd, IDC_LOC), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 				}
 
 				//rotation
-				value = GetEditboxString(GetDlgItem(hTransform, IDC_ROT));
+				value = GetEditboxString(GetDlgItem(hwnd, IDC_ROT));
 
 				if (!bEulerAngles)
 				{
@@ -1186,12 +1254,12 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 					{
 						valid = FALSE;
 						ebt.pszText = GLOB_STRS[error].c_str();
-						SendMessage(GetDlgItem(hTransform, IDC_ROT), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+						SendMessage(GetDlgItem(hwnd, IDC_ROT), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 					}
 				}
 				else
 				{
-					std::string oldvar = variables[indextable[iItem].index2].value;
+					std::string oldvar = variables[indextable[iItem].second].value.substr(1);
 					QTRN qold;
 					qold.x = BinToFloat(oldvar.substr(12 + 0, 4));
 					qold.y = BinToFloat(oldvar.substr(12 + 4, 4));
@@ -1203,12 +1271,12 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 					{
 						valid = FALSE;
 						ebt.pszText = GLOB_STRS[error].c_str();
-						SendMessage(GetDlgItem(hTransform, IDC_ROT), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+						SendMessage(GetDlgItem(hwnd, IDC_ROT), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 					}
 				}
 
 				//scale
-				value = GetEditboxString(GetDlgItem(hTransform, IDC_SCA));
+				value = GetEditboxString(GetDlgItem(hwnd, IDC_SCA));
 
 				if (bAllowScale)
 				{
@@ -1217,19 +1285,17 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 					{
 						valid = FALSE;
 						ebt.pszText = GLOB_STRS[error].c_str();
-						SendMessage(GetDlgItem(hTransform, IDC_SCA), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+						SendMessage(GetDlgItem(hwnd, IDC_SCA), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 					}
 				}
 				else
-					bin += variables[indextable[iItem].index2].value.substr(28, 12);
+					bin += variables[indextable[iItem].second].value.substr(29, 12);
 
 				if (valid)
 				{
-					value = GetEditboxString(GetDlgItem(hTransform, IDC_TAG));
-
-					bin += char(value.size()) + WStringToString(value);
-
-					UpdateValue(lvalue, indextable[iItem].index2, bin);
+					value = GetEditboxString(GetDlgItem(hwnd, IDC_TAG));
+					bin += WStrToBinStr(value);
+					UpdateValue(lvalue, indextable[iItem].second, bin);
 
 					EndDialog(hwnd, 0);
 					DestroyWindow(hwnd);
@@ -1253,7 +1319,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK ColorProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static bool bIsColorProc = TRUE;
 
@@ -1261,23 +1327,9 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	{
 	case WM_INITDIALOG:
 	{
-		hColor = hwnd;
 		bIsColorProc = (lParam == 1);
-
-		UINT type = variables[indextable[iItem].index2].type;
-		if (type != (bIsColorProc ? ID_COLOR : ID_VECTOR))
-		{
-			//something seriously went wrong here
-			EndDialog(hwnd, 0);
-			DestroyWindow(hwnd);
-			EnableWindow(hDialog, TRUE);
-			break;
-		}
-
-		std::wstring str;
-		FormatString(str, variables[indextable[iItem].index2].value, bIsColorProc ? ID_COLOR : ID_VECTOR);
-
-		SendMessage((GetDlgItem(hColor, IDC_COL)), WM_SETTEXT, 0, (LPARAM)str.c_str());
+		std::wstring str = Variable::ValueBinToStr(variables[indextable[iItem].second].value, bIsColorProc ? EntryValue::Color : EntryValue::Vector3);
+		SendMessage((GetDlgItem(hwnd, IDC_COL)), WM_SETTEXT, 0, (LPARAM)str.c_str());
 		break;
 	}
 	case WM_COMMAND:
@@ -1288,7 +1340,7 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			{
 			case IDC_APPLY:
 			{
-				UINT error, size;
+				uint32_t error, size;
 				std::wstring value;
 				std::string bin;
 				HWND hEdit;
@@ -1297,7 +1349,7 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				ebt.pszTitle = ErrorTitle.c_str();
 				ebt.ttiIcon = TTI_ERROR_LARGE;
 
-				hEdit = GetDlgItem(hColor, IDC_COL);
+				hEdit = GetDlgItem(hwnd, IDC_COL);
 				size = GetWindowTextLength(hEdit) + 1;
 				TCHAR *LocEditText = new TCHAR[size];
 				memset(LocEditText, 0, size);
@@ -1309,11 +1361,11 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				if (error > 0)
 				{
 					ebt.pszText = GLOB_STRS[error].c_str();
-					SendMessage(GetDlgItem(hColor, IDC_COL), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
+					SendMessage(GetDlgItem(hwnd, IDC_COL), EM_SHOWBALLOONTIP, 0, (LPARAM)&ebt);
 				}
 				else
 				{
-					UpdateValue(value, indextable[iItem].index2, bin);
+					UpdateValue(value, indextable[iItem].second, bin);
 
 					EndDialog(hwnd, 0);
 					DestroyWindow(hwnd);
@@ -1337,26 +1389,108 @@ BOOL CALLBACK ColorProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-BOOL CALLBACK StringProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK ContainerEditListChildProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
+	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (plID == nullptr)
+		return FALSE;
 	switch (Message)
 	{
-	case WM_INITDIALOG:
+	case WM_DESTROY:
 	{
-		std::wstring wstr = StringToWString(variables[indextable[iItem].index2].value);
-		std::wstring PrntStr;
+		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
+		plID = nullptr;
+		return TRUE;
+	}
+	}
+	return CallWindowProc(plID->hDefProc, hwnd, Message, wParam, lParam);
+}
 
-		UINT i = 4;
-		while (TRUE)
+BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+{
+	static HWND hListEdit = NULL;
+	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (plID == nullptr)
+		return FALSE;
+
+	switch (Message)
+	{
+	case WM_LBUTTONDOWN:
+	{
+		LVHITTESTINFO itemclicked;
+		itemclicked.pt.x = GET_X_LPARAM(lParam);
+		itemclicked.pt.y = GET_Y_LPARAM(lParam);
+		const int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
+		DestroyWindow(hListEdit);
+		SendMessage(hwnd, WM_DESTROYBUTTONS, 0, 0);
+		if (lResult != -1)
 		{
-			if (i + 1 > wstr.size()) break;
-			UINT len = static_cast<int>(wstr[i]);
-			PrntStr += wstr.substr(i + 1, len);
-			PrntStr += {char(13), char(10)};
-			i += len + 1;
-		}
+			RECT rekt;
+			
+			ListView_GetSubItemRect(hwnd, itemclicked.iItem, itemclicked.iSubItem, LVIR_BOUNDS, &rekt);
+			const int pos_left = rekt.left;
+			ListView_GetSubItemRect(hwnd, itemclicked.iItem, itemclicked.iSubItem, LVIR_LABEL, &rekt);
+			const int height = rekt.bottom - rekt.top;
+			
 
-		SetDlgItemText(hwnd, IDC_STRINGEDIT, PrntStr.c_str());
+			if (itemclicked.iSubItem > 0)
+			{
+				const int szbuf = 255;
+				const int buttonwidth = 45;
+				const int width = rekt.right - pos_left - 2 * buttonwidth;
+				
+				std::wstring buffer(szbuf, '\0');
+				ListView_GetItemText(hwnd, itemclicked.iItem, itemclicked.iSubItem, &buffer[0], szbuf);
+
+				hListEdit = CreateWindowEx(WS_EX_CLIENTEDGE, _T("EDIT"), &buffer[0], WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, pos_left, rekt.top, width, height, hwnd, (HMENU)1337, hInst, NULL);
+				AllocWindowUserData(hListEdit, (LONG)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
+				SendMessage(hListEdit, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				SendMessage(hListEdit, EM_SETLIMITTEXT, szbuf, 0);
+				SetFocus(hListEdit);
+				SendMessage(hListEdit, EM_SETSEL, 0, -1);
+				SendMessage(hListEdit, EM_SETSEL, -1, 0);
+
+				// Create apply button
+				HWND hApplyButton = CreateWindowEx(0, WC_BUTTON, _T("Set"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left + width, rekt.top, buttonwidth, height, hwnd, (HMENU)IDC_BT1, hInst, NULL);
+				SendMessage(hApplyButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				// Create cancel button
+				HWND hCancelButton = CreateWindowEx(0, WC_BUTTON, _T("Cancel"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left + width + buttonwidth, rekt.top, buttonwidth, height, hwnd, (HMENU)IDC_BT2, hInst, NULL);
+				SendMessage(hCancelButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+			}
+			else
+			{
+				const int width = rekt.right - pos_left;
+				const int buttonwidth = static_cast<int>(width * 0.6f);
+				const int buttonwidth2 = static_cast<int>((width - buttonwidth) / 2);
+				// Create + button
+				HWND hAddButton = CreateWindowEx(0, WC_BUTTON, L"+", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left, rekt.top, buttonwidth2, height, hwnd, (HMENU)IDC_BT3, hInst, NULL);
+				SendMessage(hAddButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				// Create x button
+				HWND hRemoveButton = CreateWindowEx(0, WC_BUTTON, L"-", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left + buttonwidth2, rekt.top, buttonwidth2, height, hwnd, (HMENU)IDC_BT4, hInst, NULL);
+				SendMessage(hRemoveButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				// Create cancel button
+				HWND hCancelButton = CreateWindowEx(0, WC_BUTTON, L"Cancel", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left + (width - buttonwidth), rekt.top, buttonwidth, height, hwnd, (HMENU)IDC_BT5, hInst, NULL);
+				SendMessage(hCancelButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				AllocWindowUserData(hCancelButton, (LONG)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
+			}
+		}
+		return FALSE;
+	}
+	case WM_DESTROYBUTTONS:
+	{
+		for (auto &id : { IDC_BT1, IDC_BT2, IDC_BT3, IDC_BT4, IDC_BT5 })
+			DestroyWindow(GetDlgItem(hwnd, id));
+		break;
+	}
+	case WM_CONTAINERUPDATEINDECES:
+	{
+		auto NumItems = ListView_GetItemCount(hwnd);
+		for (int32_t i = 0; i < NumItems; i++)
+		{
+			auto str = std::to_wstring(i);
+			ListView_SetItemText(hwnd, i, 0, &str[0]);
+		}
+		break;
 	}
 	case WM_COMMAND:
 	{
@@ -1364,45 +1498,172 @@ BOOL CALLBACK StringProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 		{
 			switch (LOWORD(wParam))
 			{
-				case IDC_APPLY:
+			case IDC_BT1: // Apply
+			{
+				PLID *plID = (PLID *)GetWindowLong(hListEdit, GWL_USERDATA);
+				if (plID != nullptr)
 				{
-					UINT max = SendMessage(GetDlgItem(hwnd, IDC_STRINGEDIT), EM_GETLINECOUNT, 0, 0);
+					std::wstring str = GetEditboxString(hListEdit);
+					ListView_SetItemText(hwnd, plID->nPID, plID->dat, &str[0]);
+				}
+				// Leak into Discard
+			}
+			case IDC_BT2: // Discard
+			{
+				DestroyWindow(hListEdit);
+				DestroyWindow(GetDlgItem(hwnd, IDC_BT1));
+				DestroyWindow(GetDlgItem(hwnd, IDC_BT2));
+				break;
+			}
+			case IDC_BT3: // +
+			case IDC_BT4: // -
+			{
+				// The Cancel button contains info about which row and column we're in
+				PLID *plID = (PLID *)GetWindowLong(GetDlgItem(hwnd, IDC_BT5), GWL_USERDATA);
+				if (plID == nullptr)
+					break;
+				if (LOWORD(wParam) == IDC_BT4) // -
+				{
+					ListView_DeleteItem(hwnd, plID->nPID);
+					PostMessage(hwnd, WM_CONTAINERUPDATEINDECES, 0, 0);
+				}
+				else
+				{
+					LVITEM lvi;
+					std::wstring IndexStr = std::to_wstring(plID->nPID + 1);
+					lvi.mask = LVIF_TEXT | LVIF_STATE | LVIF_PARAM; lvi.state = 0; lvi.stateMask = 0;
+					lvi.iItem = plID->nPID + 1; lvi.iSubItem = 0; lvi.pszText = &IndexStr[0], lvi.lParam = 0;
+					SendMessage(hwnd, LVM_INSERTITEM, 0, (LPARAM)&lvi);
+					PostMessage(hwnd, WM_CONTAINERUPDATEINDECES, 0, 0);
+				}
+				// Leak into Cancel
+			}
+			case IDC_BT5 : // Cancel
+			{
+				SendMessage(hwnd, WM_DESTROYBUTTONS, 0, 0);
+				break;
+			}
+			}
+		}
+		break;
+	}
+	case WM_DESTROY:
+	{
+		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
+		plID = nullptr;
+		return TRUE;
+	}
+	}
+	return CallWindowProc(plID->hDefProc, hwnd, Message, wParam, lParam);
+}
 
-					int len = GetWindowTextLength(GetDlgItem(hwnd, IDC_STRINGEDIT)) + 1;
-					std::wstring ctrlText(len, '\0');
-					//TCHAR* ctrlText = new TCHAR[len];
-					//memset(ctrlText, 0, len);
-					GetWindowText(GetDlgItem(hwnd, IDC_STRINGEDIT), (LPTSTR)ctrlText.data(), len);
+BOOL CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+{
+	static BOOL bTwoColumns;
+	switch (Message)
+	{
+	case WM_INITDIALOG:
+	{
+		bTwoColumns = variables[indextable[iItem].second].header.GetContainerKeyType() != EntryValue::Null;
+		const HWND hContainerList = GetDlgItem(hwnd, IDC_CONTAINERLIST);
+		ListView_SetExtendedListViewStyle(hContainerList, LVS_EX_GRIDLINES);
 
-					UINT lines = 0;
-					std::string value;
-					for (UINT i = 0; i < max; i++)
+		AllocWindowUserData(hContainerList, (LONG)ContainerEditListProc);
+
+		RECT rekt;
+		GetWindowRect(hContainerList, &rekt);
+		const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
+
+		// Column headers
+		
+		LVCOLUMN lvc;
+		lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+
+		int indexwidth = static_cast<int>(width * 0.1f);
+		int entrywidth = static_cast<int>((width - indexwidth) / (bTwoColumns + 1));
+		lvc.iSubItem = 1 + bTwoColumns; lvc.pszText = _T("Value"); lvc.cx = entrywidth; lvc.fmt = LVCFMT_LEFT;
+		SendMessage(hContainerList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+
+		if (bTwoColumns)
+		{
+			lvc.iSubItem = 1; lvc.pszText = _T("Key"); lvc.cx = entrywidth;
+			SendMessage(hContainerList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+		}
+
+		lvc.iSubItem = 0; lvc.pszText = _T("Index"); lvc.cx = indexwidth;
+		SendMessage(hContainerList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+
+		// Entries
+		const Variable *var = &variables[indextable[iItem].second];
+		const std::string *str = &var->value;
+		const uint32_t num = *((int*)(str->data()));
+		uint32_t offset = 4;
+		LVITEM lvi;
+		for (uint32_t i = 0; i < num; i++)
+		{
+			std::wstring IndexStr = std::to_wstring(i);
+			lvi.mask = LVIF_TEXT | LVIF_STATE | LVIF_PARAM; lvi.state = 0; lvi.stateMask = 0;
+			lvi.iItem = i; lvi.iSubItem = 0; lvi.pszText = &IndexStr[0], lvi.lParam = 0;
+			SendMessage(hContainerList, LVM_INSERTITEM, 0, (LPARAM)&lvi);
+
+			for (auto &index : { 1 , 2 })
+			{
+				uint32_t len = static_cast<int>((*str)[offset]) + 1;
+				std::wstring EntryStr = Variable::ValueBinToStr(str->substr(offset, len), bTwoColumns && index == 1 ? var->header.GetContainerKeyType() : var->header.GetValueType());
+
+				lvi.mask = LVIF_TEXT | LVIF_STATE; lvi.state = 0; lvi.stateMask = 0;
+				lvi.iItem = i; lvi.iSubItem = index; lvi.pszText = (LPWSTR)EntryStr.c_str();
+				SendMessage(hContainerList, LVM_SETITEM, 0, (LPARAM)&lvi);
+				offset += len;
+				if (!bTwoColumns)
+					break;
+			}
+		}
+		break;
+	}
+	case WM_NOTIFY:
+	{
+		if ((((LPNMHDR)lParam)->code == LVN_COLUMNCLICK) && ListView_GetItemCount(GetDlgItem(hwnd, IDC_CONTAINERLIST)) == 0)
+		{
+			LVITEM lvi;
+			lvi.mask = LVIF_TEXT | LVIF_STATE | LVIF_PARAM; lvi.state = 0; lvi.stateMask = 0; lvi.iItem = 0; lvi.iSubItem = 0; lvi.pszText = L"0", lvi.lParam = 0;
+			SendMessage(GetDlgItem(hwnd, IDC_CONTAINERLIST), LVM_INSERTITEM, 0, (LPARAM)&lvi);
+		}
+		break;
+	}
+	case WM_COMMAND:
+	{
+		if (HIWORD(wParam) == BN_CLICKED)
+		{
+			switch (LOWORD(wParam))
+			{
+			case IDC_APPLY:
+			{
+				const HWND hContainerList = GetDlgItem(hwnd, IDC_CONTAINERLIST);
+				const auto NumItems = ListView_GetItemCount(hContainerList);
+				const int sztext = 255;
+				std::string bin = IntToBin(NumItems);
+				for (int32_t i = 0; i < NumItems; i++)
+				{
+					for (int32_t j = 1; j < (bTwoColumns + 2); j++)
 					{
-						UINT charindex = SendMessage(GetDlgItem(hwnd, IDC_STRINGEDIT), EM_LINEINDEX, i, 0);
-						UINT linelen = SendMessage(GetDlgItem(hwnd, IDC_STRINGEDIT), EM_LINELENGTH, charindex, 0);
-						if (linelen != 0)
-						{
-							if (linelen > 255) linelen = 255;
-							value += char(linelen);
-							value += WStringToString(ctrlText.substr(charindex, linelen));
-							lines++;
-						}
+						std::wstring buffer(sztext, '\0');
+						LVITEM lvi;
+						lvi.mask = LVIF_TEXT; lvi.cchTextMax = sztext; lvi.iSubItem = j; lvi.pszText = &buffer[0];
+						buffer.resize(SendMessage(hContainerList, LVM_GETITEMTEXT, i, (LPARAM)&lvi));
+						bin += WStrToBinStr(buffer);
 					}
-					value.insert(0, IntStrToBin(std::to_string(lines)));
-					UpdateValue(_T(""), indextable[iItem].index2, value);
-
-					EndDialog(hwnd, 0);
-					DestroyWindow(hwnd);
-					EnableWindow(hDialog, TRUE);
-					break;
 				}
-				case IDC_DISCARD:
-				{
-					EndDialog(hwnd, 0);
-					DestroyWindow(hwnd);
-					EnableWindow(hDialog, TRUE);
-					break;
-				}
+				UpdateValue(L"", indextable[iItem].second, bin);
+				// Leak into Discard
+			}
+			case IDC_DISCARD:
+			{
+				EndDialog(hwnd, 0);
+				DestroyWindow(hwnd);
+				EnableWindow(hDialog, TRUE);
+				break;
+			}
 			}
 		}
 	}
@@ -1412,7 +1673,7 @@ BOOL CALLBACK StringProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-BOOL CALLBACK KeyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static int s_scrollYdelta = 0;
 	static HBRUSH s_backgroundBrush;
@@ -1523,9 +1784,9 @@ BOOL CALLBACK KeyListProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return TRUE;
 }
 
-BOOL CALLBACK KeyManagerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
-	static std::vector<std::wstring> KeyNames = { L"keyferndale", L"keygifu", L"keyhayoso", L"keyhome", L"keyruscko", L"keysatsuma"};
+	static std::vector<std::wstring> KeyNames = { L"keyferndale", L"keygifu", L"keyhayosiko", L"keyhome", L"keyruscko", L"keysatsuma"};
 	static HWND hKeys;
 
 	switch (message)
@@ -1550,25 +1811,25 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 		int offset = 6;
 
 		// For every key we add a checkbox, if the coresponding location# was found
-		for (UINT index = 0; index < KeyNames.size(); index++)
+		for (uint32_t index = 0; index < KeyNames.size(); index++)
 		{
-			std::string LocationName = "location" + std::to_string(index + 1);
+			std::wstring LocationName = L"location" + std::to_wstring(index + 1);
 			if ((EntryExists(LocationName) < 0) || EntryExists(KeyNames[index]) < 0 )
 				continue;
 
 			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, KeyNames[index].substr(3).c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hKeys, (HMENU)index, hInst, NULL);
-			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hFont, TRUE);
+			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 			// Get the result
 			const int Result = *((int*)(variables[EntryExists(KeyNames[index])].value.substr(0, 4).data()));
 
 			// Get the multiplier
-			std::wstring MultiplierStr;
-			FormatString(MultiplierStr, variables[EntryExists(std::string("keycheck"))].value, ID_INT);
+			std::wstring MultiplierStr = Variable::ValueBinToStr(variables[EntryExists(std::wstring(L"keycheck"))].value, EntryValue::Integer);
+
 			const int Multiplier = std::stoi(MultiplierStr, NULL);
 
 			// Get the base value
-			const std::string BaseValue = variables[EntryExists(LocationName)].value;
+			const std::string BaseValue = variables[EntryExists(LocationName)].value.substr(1);
 			const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
 			
 			// If the result is correct, check the box
@@ -1595,18 +1856,17 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 			{
 			case IDC_APPLY:
 			{
-				for (UINT index = 0; index < KeyNames.size(); index++)
+				for (uint32_t index = 0; index < KeyNames.size(); index++)
 				{
-					std::string LocationName = "location" + std::to_string(index + 1);
+					std::wstring LocationName = L"location" + std::to_wstring(index + 1);
 					if ((EntryExists(LocationName) < 0) || EntryExists(KeyNames[index]) < 0)
 						continue;
 
 					const int ResultIndex = EntryExists(KeyNames[index]);
 					const int Result = *((int*)(variables[ResultIndex].value.substr(0, 4).data()));
-					std::wstring MultiplierStr;
-					FormatString(MultiplierStr, variables[EntryExists(std::string("keycheck"))].value, ID_INT);
+					std::wstring MultiplierStr = Variable::ValueBinToStr(variables[EntryExists(L"keycheck")].value, EntryValue::Integer);
 					const int Multiplier = std::stoi(MultiplierStr, NULL);
-					const std::string BaseValue = variables[EntryExists(LocationName)].value;
+					const std::string BaseValue = variables[EntryExists(LocationName)].value.substr(1);
 					const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
 
 					if (IsDlgButtonChecked(hKeys, index) == BST_CHECKED && Base * Multiplier != Result)
@@ -1636,7 +1896,104 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 	return TRUE;
 }
 
-BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+{
+	static HWND hList;
+	static std::vector<Issue> issues;
+	static int IssuesFixed;
+
+	switch (message)
+	{
+	case WM_INITDIALOG:
+	{
+		IssuesFixed = 0;
+		SetWindowText(hwnd, L"Save-file issues");
+		const int BorderMargin = 12;
+		RECT rekt;
+		GetClientRect(hwnd, &rekt);
+		const int ListWidth = rekt.right - rekt.left - 2 * BorderMargin;
+		const int ListHeight = rekt.bottom - rekt.top - 37 - 2 * BorderMargin;
+
+		hList = CreateDialog(hInst, MAKEINTRESOURCE(IDD_KEYLIST), hwnd, KeyListProc);
+		ShowWindow(hList, SW_SHOW);
+		SetWindowPos(hList, NULL, BorderMargin, BorderMargin, ListWidth, ListHeight, SWP_SHOWWINDOW);
+
+		TEXTMETRIC tm;
+		HDC hdc = GetDC(hwnd);
+		GetTextMetrics(hdc, &tm);
+		int yChar = tm.tmHeight + tm.tmExternalLeading;
+		int offset = 6;
+		issues = std::move(*reinterpret_cast<std::vector<Issue>*>(lParam));
+
+		std::wstring NumIssues(128, '\0');
+		swprintf(&NumIssues[0], 128, GLOB_STRS[50].c_str(), issues.size(), (issues.size() == 1 ? GLOB_STRS[52] : GLOB_STRS[51]).c_str());
+
+		HWND hDescriptionText = CreateWindowEx(0, WC_STATIC, NumIssues.c_str(), WS_CHILD | WS_VISIBLE, BorderMargin, ListHeight + 28, 120, yChar, hwnd, NULL, hInst, NULL);
+		SendMessage(hDescriptionText, WM_SETFONT, (WPARAM)hListFont, TRUE);
+
+		SetWindowText(GetDlgItem(hwnd, IDC_APPLY), L"Fix selected");
+		SetWindowText(GetDlgItem(hwnd, IDC_DISCARD), L"Ignore");
+
+		for (uint32_t i = 0; i < issues.size(); i++)
+		{
+			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, variables[issues[i].first].key.c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hList, (HMENU)i, hInst, NULL);
+			CheckDlgButton(hList, i, BST_CHECKED);
+			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hListFont, TRUE);
+			offset += yChar;
+		}
+		// Apply size
+		PostMessage(hList, WM_UPDATESIZE, offset + 3, NULL);
+
+		// Invalidate and redraw to avoid transparency issues
+		GetClientRect(hList, &rekt);
+		InvalidateRect(hList, &rekt, TRUE);
+		RedrawWindow(hList, &rekt, NULL, RDW_ERASE | RDW_INVALIDATE);
+		break;
+	}
+	case WM_COMMAND:
+	{
+		if (HIWORD(wParam) == BN_CLICKED)
+		{
+			switch (LOWORD(wParam))
+			{
+			case IDC_APPLY:
+			{
+				for (uint32_t i = 0; i < issues.size(); i++)
+					if (IsDlgButtonChecked(hList, i) == BST_CHECKED)
+					{
+						UpdateValue(L"", issues[i].first, issues[i].second);
+						IssuesFixed++;
+					}
+				// Leak into Discard to close the window
+			}
+			case IDC_DISCARD:
+			{
+				HWND hOut = GetDlgItem(hDialog, IDC_OUTPUT4);
+				ClearStatic(hOut, hDialog);
+				int RemainingIssues = issues.size() - IssuesFixed;
+				if (RemainingIssues > 0)
+				{
+					std::wstring buffer(128, '\0');
+					swprintf(&buffer[0], 128, GLOB_STRS[50].c_str(), RemainingIssues, (RemainingIssues == 1 ? GLOB_STRS[52] : GLOB_STRS[51]).c_str());
+					SendMessage(hOut, WM_SETTEXT, 0, (LPARAM)&buffer[0]);
+				}
+				else
+					SendMessage(hOut, WM_SETTEXT, 0, (LPARAM)L"");
+				EndDialog(hwnd, 0);
+				DestroyWindow(hwnd);
+				EnableWindow(hDialog, TRUE);
+				break;
+			}
+			}
+		}
+	}
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -1651,21 +2008,20 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 				break;
 			}
 
-			for (UINT i = 0; i < itemTypes.size(); i++)
+			for (uint32_t i = 0; i < itemTypes.size(); i++)
 			{
-				if (EntryExists(itemTypes[i].GetID()) >= 0)
-					SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetDisplayName()).c_str());
+				SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetDisplayName()).c_str());
 			}
 
-			for (UINT i = 0; i < locations.size(); i++)
+			for (uint32_t i = 0; i < locations.size(); i++)
 			{
-				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_ADDSTRING, 0, (LPARAM)locations[i].badstring.c_str());
+				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.c_str());
 			}
 
-			for (UINT i = 0; i < variables.size(); i++)
+			for (uint32_t i = 0; i < variables.size(); i++)
 			{
-				if (variables[i].type == ID_TRANSFORM)
-					SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
+				if (variables[i].header.IsNonContainerOfValueType(EntryValue::Transform))
+					SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
 			}
 
 			HWND hOffset = GetDlgItem(hwnd, IDC_AMOUNT);
@@ -1682,32 +2038,19 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 				{
 				case IDC_APPLY:
 				{
-					UINT index_to = 0;
-					UINT index_what = 0;
-					UINT index = 0;  
+					uint32_t index = 0;  
 					std::string location;
-
-					index = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-
-					for (UINT i = 0; i < itemTypes.size(); i++)
-					{
-						if (EntryExists(itemTypes[i].GetID()) >= 0)
-						{
-							if (index_what == index)
-								break;
-							index_what++;
-						}
-					}
-
-					index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+					uint32_t index_what = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+					uint32_t index_to = 0;
+					index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
 
 					if (index < locations.size())
-						location = WStringToString(locations[index].newstring);
+						location = WStringToString(locations[index].second);
 					else
 					{
-						for (UINT i = 0; i < variables.size(); i++)
+						for (uint32_t i = 0; i < variables.size(); i++)
 						{
-							if (variables[i].type == ID_TRANSFORM)
+							if (variables[i].header.IsNonContainerOfValueType(EntryValue::Transform))
 							{
 								if (index_to == index - locations.size())
 								{
@@ -1728,35 +2071,52 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 					if (amount < 1)
 						amount = 1;
 
-					index = 0;
-					for (UINT i = 0; i < (UINT)amount; i++)
+					
+					index = EntryExists(itemTypes[index_what].GetID());
+					const bool bNewIdEntry = (index == UINT_MAX);
+					if (bNewIdEntry)
 					{
-						index = EntryExists(itemTypes[index_what].GetID());
-						std::wstring idStr;
-						FormatString(idStr, variables[index].value, ID_INT);
-						int a = static_cast<int>(::strtol(WStringToString(idStr).c_str(), NULL, 10));
-						a++;
-						UpdateValue(std::to_wstring(a), index);
-						std::wstring keyprefix = StringToWString(itemTypes[index_what].GetName()) + std::to_wstring(a);
+						// The ID entry is missing, so we create it
+						std::wstring SanitizedID = itemTypes[index_what].GetID();
+						Variables_add(Variable(Header(EntryValue::Integer), IntToBin(0), UINT_MAX, itemTypes[index_what].GetID(), *SanitizeTagStr(SanitizedID)));
+					}
+					for (uint32_t i = 0; i < (uint32_t)amount; i++)
+					{
+						// We have to refind the ID entry here because it might change after iterations
+						index = EntryExists(itemTypes[index_what].GetID(), !bNewIdEntry);
 
-						Variables_add(Variable(location, UINT_MAX, ID_TRANSFORM, keyprefix + StringToWString(itemAttributes[0].GetName())));
+						if (index == UINT_MAX)
+						{
+							MessageBox(hwnd, GLOB_STRS[47].c_str(), Title.c_str(), MB_OK | MB_ICONERROR);
+							EndDialog(hwnd, 0);
+							DestroyWindow(hwnd);
+							EnableWindow(hDialog, TRUE);
+							break;
+						}
+
+						std::wstring idStr = variables[index].GetDisplayString();
+						int a = static_cast<int>(::strtol(WStringToString(idStr).c_str(), NULL, 10)) + 1;
+						UpdateValue(std::to_wstring(a), index);
+						std::wstring keyprefix = itemTypes[index_what].GetName() + std::to_wstring(a);
+
+						std::wstring SanitizedTransformKey = keyprefix + itemAttributes[0].GetName();
+						Variables_add(Variable(Header(EntryValue::Transform), location, UINT_MAX, keyprefix + itemAttributes[0].GetName(), *SanitizeTagStr(SanitizedTransformKey)));
 
 						std::vector<char> attributes = itemTypes[index_what].GetAttributes(itemAttributes.size());
 
-						for (UINT j = 0; j < attributes.size(); j++)
+						for (uint32_t j = 0; j < attributes.size(); j++)
 						{
-							std::string bin;
-							UINT type = itemAttributes[(UINT)attributes[j]].GetType();
-							std::string max = std::to_string(itemAttributes[(UINT)attributes[j]].GetMax());
-							TruncFloatStr(max);
-							FormatValue(bin, max, type);
+							uint32_t type = itemAttributes[(uint32_t)attributes[j]].GetType();
+							std::wstring max = std::to_wstring(itemAttributes[(uint32_t)attributes[j]].GetMax());
+							std::string bin = Variable::ValueStrToBin(*TruncFloatStr(max), type);
 							
-							Variables_add(Variable(bin, UINT_MAX, type, keyprefix + StringToWString(itemAttributes[(UINT)attributes[j]].GetName())));
+							std::wstring SanitizedAttributeKey = keyprefix + itemAttributes[(uint32_t)attributes[j]].GetName();
+							Variables_add(Variable(Header(type), bin, UINT_MAX, keyprefix + itemAttributes[(uint32_t)attributes[j]].GetName(), *SanitizeTagStr(SanitizedAttributeKey)));
 						}
 
 					}
 
-					UINT size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
+					uint32_t size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
 					std::wstring str(size, '\0');
 					GetWindowText(GetDlgItem(hwnd, IDC_FILTER), (LPWSTR)str.data(), size);
 					str.resize(size - 1);
@@ -1784,11 +2144,14 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 				switch (LOWORD(wParam))
 				{
 					case IDC_SPAWNWHAT:
-						if (SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
+					{
+						if (SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
 							::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
 						break;
+					}
+
 					case IDC_LOCTO:
-						if (SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
+						if (SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0) != -1)
 							::EnableWindow(GetDlgItem(hwnd, IDC_APPLY), TRUE);
 						break;
 				}
@@ -1801,23 +2164,23 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-BOOL CALLBACK CleanItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
 		case WM_INITDIALOG:
 		{
-			for (UINT i = 0; i < itemTypes.size(); i++)
+			for (uint32_t i = 0; i < itemTypes.size(); i++)
 			{
 				if (EntryExists(itemTypes[i].GetID()) >= 0)
-					SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetName()).c_str());
+					SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_ADDSTRING, 0, (LPARAM)StringToWString(itemTypes[i].GetName()).c_str());
 			}
 		}
 		case WM_COMMAND:
 			if (HIWORD(wParam) == CBN_SELCHANGE)
 			{
-				UINT index_what = 0, index = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-				for (UINT i = 0; i < itemTypes.size(); i++)
+				uint32_t index_what = 0, index = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				for (uint32_t i = 0; i < itemTypes.size(); i++)
 				{
 					if (EntryExists(itemTypes[i].GetID()) >= 0)
 					{
@@ -1826,18 +2189,18 @@ BOOL CALLBACK CleanItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 						index_what++;
 					}
 				}
-				for (UINT i = 0; i < variables.size(); i++)
+				for (uint32_t i = 0; i < variables.size(); i++)
 				{
-					if (StartsWithStr(variables[i].key, StringToWString(itemTypes[index_what].GetName())))
+					if (StartsWithStr(variables[i].key, itemTypes[index_what].GetName()))
 					{
-						UINT id = ParseItemID(variables[i].key, itemTypes[index_what].GetName().size() + 1);
+						uint32_t id = ParseItemID(variables[i].key, itemTypes[index_what].GetName().size() + 1);
 						if (id != 0)
 						{
 							std::wstring idStr = std::to_wstring(id);
 
 							std::vector<char> attributes = itemTypes[index_what].GetAttributes(itemAttributes.size());
 
-							for (UINT j = 0; j < attributes.size(); j++)
+							for (uint32_t j = 0; j < attributes.size(); j++)
 							{
 								std::string bin;
 								//UINT type = itemAttributes[(UINT)attributes[j]].GetName();
@@ -1855,42 +2218,85 @@ BOOL CALLBACK CleanItemProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-LRESULT CALLBACK EditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK EditProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
+	PLID *thisplID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (thisplID == nullptr)
+		return FALSE;
+
 	switch (message)
 	{
 		case WM_KILLFOCUS:
 		{
-			return CloseEditbox(hwnd, GetDlgItem(hDialog, IDC_OUTPUTBAR2));
+			// If we already executed once, then skip
+			if (thisplID->nPID)
+				break;
+
+			bool bIgnoreContent = FALSE;
+			for (auto& hButton : { GetDlgItem(GetParent(hwnd), IDC_BUTNEGINF),  GetDlgItem(GetParent(hwnd), IDC_BUTPOSINF) })
+			{
+				if (hButton == (HWND)wParam)
+				{
+					// The focus got lost when any of the infinity buttons was clicked
+					PLID *plID = (PLID *)GetWindowLong(hButton, GWL_USERDATA);
+					bIgnoreContent = (plID != nullptr);
+					if (bIgnoreContent)
+					{
+						const float fvalue = plID->nPID ? std::numeric_limits<float>::infinity() : -std::numeric_limits<float>::quiet_NaN();
+
+						if (variables[indextable[iItem].second].header.GetValueType() == EntryValue::Float)
+							UpdateValue(_TEXT(""), indextable[iItem].second, FloatToBin(fvalue));
+					}
+				}
+			}
+			return CloseEditbox(hwnd, GetDlgItem(hDialog, IDC_OUTPUTBAR2), bIgnoreContent);
 		}
 		case WM_GETDLGCODE:
-			switch (wParam)
+		{
+			if (wParam == VK_ESCAPE || wParam == VK_RETURN)
 			{
-				case VK_ESCAPE: 
-				case VK_RETURN: 
-					return CloseEditbox(hwnd, GetDlgItem(hDialog, IDC_OUTPUTBAR2));
+				// If we already executed once, then skip
+				if (thisplID->nPID)
+					break;
+				return CloseEditbox(hwnd, GetDlgItem(hDialog, IDC_OUTPUTBAR2));
 			}
+			break;
+		}
+		case WM_DESTROY:
+		{
+			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, thisplID);
+			thisplID = nullptr;
+			return TRUE;
+		}
 	}
-
-	return CallWindowProc(DefaultEditProc, hwnd, message, wParam, lParam);
+	return CallWindowProc(thisplID->hDefProc, hwnd, message, wParam, lParam);
 }
 
-LRESULT CALLBACK ComboProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK ComboProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
+	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (plID == nullptr)
+		return FALSE; 
+
 	switch (message)
 	{
-		case WM_KILLFOCUS:
 		case WM_CLOSE:
 		{
 			DestroyWindow(hwnd);
-			hCEdit = NULL;
 			return 0;
 		}
+		case WM_DESTROY:
+		{
+			hCEdit = NULL;
+			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
+			plID = nullptr;
+			return TRUE;
+		}
 	}
-	return CallWindowProc(DefaultComboProc, hwnd, message, wParam, lParam);
+	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
 }
 
-LRESULT CALLBACK ListViewProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK ListViewProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -1903,7 +2309,27 @@ LRESULT CALLBACK ListViewProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 	return CallWindowProc(DefaultListViewProc, hwnd, message, wParam, lParam);
 }
 
-LRESULT CALLBACK ListCtrlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+// Some controls inside ListCtrl allocated some data on the heap, so we need to clean it up upon destroying
+// Namely: inf buttons
+LRESULT CALLBACK ListCtrlChildProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+{
+	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	if (plID == nullptr)
+		return FALSE;
+
+	switch (message)
+	{
+		case WM_DESTROY:
+		{
+			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
+			plID = nullptr;
+			return TRUE;
+		}
+	}
+	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -1913,8 +2339,8 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 		if (hCEdit != NULL) { SendMessage(hCEdit, WM_CLOSE, 0, 0); };
 		LVHITTESTINFO itemclicked;
 		long x, y;
-		x = (long)LOWORD(lParam);
-		y = (long)HIWORD(lParam);
+		x = (long)GET_X_LPARAM(lParam);
+		y = (long)GET_Y_LPARAM(lParam);
 		itemclicked.pt.x = x;
 		itemclicked.pt.y = y;
 		int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
@@ -1923,204 +2349,237 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 			RECT rekt;
 			iItem = itemclicked.iItem;
 			GetWindowRect(hwnd, &rekt);
-			rekt.top += HIWORD(lParam);
-			rekt.left += LOWORD(lParam);
+			rekt.top += GET_Y_LPARAM(lParam);
+			rekt.left += GET_X_LPARAM(lParam);
 
 			PostMessage(hwnd, WM_L2CONTEXTMENU, rekt.top, rekt.left);
-
 		}
 		break;
 	}
-
 	case WM_LBUTTONDOWN:
 	{
 		if (hEdit != NULL) { SendMessage(hEdit, WM_KILLFOCUS, 0, 0); return 0; };
 		if (hCEdit != NULL) { SendMessage(hCEdit, WM_CLOSE, 0, 0); return 0; };
-		if (IsWindow(hTransform)) return 0;
 
 		LVHITTESTINFO itemclicked;
-		long x, y;
-		x = (long)LOWORD(lParam);
-		y = (long)HIWORD(lParam);
-		itemclicked.pt.x = x;
-		itemclicked.pt.y = y;
-		int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
+		itemclicked.pt.x = GET_X_LPARAM(lParam);
+		itemclicked.pt.y = GET_Y_LPARAM(lParam);
+		const int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
 		if (lResult != -1)
 		{
 			if (itemclicked.iSubItem == 1) { break; }
 
 			RECT rekt;
-			std::string value = variables[indextable[itemclicked.iItem].index2].value;
+			std::string value = variables[indextable[itemclicked.iItem].second].value;
 			ListView_GetSubItemRect(hwnd, itemclicked.iItem, itemclicked.iSubItem, LVIR_BOUNDS, &rekt);
-			int height = rekt.bottom - rekt.top;
-			int width = rekt.right - rekt.left;
+			const int pos_left = rekt.left;
 
-			int type = variables[indextable[itemclicked.iItem].index2].type;
-			ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT2), hDialog);
-			SendMessage(GetDlgItem(hDialog, IDC_OUTPUT2), WM_SETTEXT, 0, (LPARAM)TypeStrs[type + 1].c_str());
+			ListView_GetSubItemRect(hwnd, itemclicked.iItem, itemclicked.iSubItem, LVIR_LABEL, &rekt);
+			const int height = rekt.bottom - rekt.top;
+			const int width = rekt.right - pos_left;
+
+			const auto type = variables[indextable[itemclicked.iItem].second].header.GetNonContainerValueType();
+			iItem = itemclicked.iItem;
 
 			switch (type)
 			{
-			case ID_STRING:
-			case ID_INT:
-			case ID_FLOAT:
+			case EntryValue::String:
+			case EntryValue::Integer:
+			case EntryValue::Float:
 			{
-				iItem = itemclicked.iItem;
-				iSubItem = itemclicked.iSubItem;
-				if (iSubItem == 0) { width = width / 4; };
-				hEdit = CreateWindowEx(WS_EX_CLIENTEDGE, _T("EDIT"), (LPWSTR)_T(""),
-					WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-					rekt.left, rekt.top, width, height, hwnd, 0, hInst, NULL);
+				const int szButton = 24;
+				const int szButtonPadding = 2;
+				const int szbuf = 128;
 
-				SendMessage(hEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
+				hEdit = CreateWindowEx(WS_EX_CLIENTEDGE, _T("EDIT"), (LPWSTR)_T(""), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, pos_left, rekt.top, type == EntryValue::Float ? width - (2 * szButton) : width , height, hwnd, 0, hInst, NULL);
 
-				int size;
-				(type == ID_STRING) ? size = 128 : size = 12;
-				SendMessage(hEdit, EM_SETLIMITTEXT, size, 0);
-				TCHAR *buffer = new TCHAR[size + 1];
-				memset(buffer, 0, size + 1);
-				ListView_GetItemText(hwnd, iItem, 0, buffer, size);
-				SendMessage(hEdit, WM_SETTEXT, 0, (LPARAM)buffer);
-				delete[] buffer;
+				SendMessage(hEdit, WM_SETFONT, (WPARAM)hListFont, TRUE);
+
+				SendMessage(hEdit, EM_SETLIMITTEXT, szbuf, 0);
+				std::wstring buffer(szbuf, '\0');
+
+				ListView_GetItemText(hwnd, iItem, 0, &buffer[0], szbuf);
+				SendMessage(hEdit, WM_SETTEXT, 0, (LPARAM)buffer.c_str());
 
 				SetFocus(hEdit);
 				SendMessage(hEdit, EM_SETSEL, 0, -1);
 				SendMessage(hEdit, EM_SETSEL, -1, 0);
 
-				DefaultEditProc = (WNDPROC)SetWindowLong(hEdit, GWL_WNDPROC, (LONG)EditProc);
+				// Alloc memory on heap to store EditBox's default window process and data
+				AllocWindowUserData(hEdit, (LONG)EditProc, 0);
+
+				if (type != EntryValue::Float)
+					break;
+
+				// For float, we add two buttons for positve and negative infinity
+				const HWND hNegInfButton = CreateWindowEx(0, WC_BUTTON, negInfinity.c_str(), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, (pos_left + width) - (2 * szButton), rekt.top, szButton, height, hwnd, (HMENU)(IDC_BUTNEGINF), hInst, NULL);
+				SendMessage(hNegInfButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+
+				// Alloc memory on heap to store NegInfButton's default window process
+				AllocWindowUserData(hNegInfButton, (LONG)ListCtrlChildProc, 0);
+
+				const HWND hPosInfButton = CreateWindowEx(0, WC_BUTTON, posInfinity.c_str(), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, (pos_left + width) - (szButton), rekt.top, szButton, height, hwnd, (HMENU)(IDC_BUTPOSINF), hInst, NULL);
+				SendMessage(hPosInfButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
+
+				// Alloc memory on heap to store PosInfButton's default window process
+				AllocWindowUserData(hPosInfButton, (LONG)ListCtrlChildProc, 1);
+
 				break;
 			}
-			case ID_BOOL:
+			case EntryValue::Bool:
 			{
-				iItem = itemclicked.iItem;
-				iSubItem = itemclicked.iSubItem;
-				int boolindex;
-				value.c_str()[0] == 0x00 ? boolindex = 0 : boolindex = 1;
-				hCEdit = CreateWindow(WC_COMBOBOX, (LPWSTR)_T(""),
-					CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-					rekt.left, rekt.top, 100, height, hwnd, NULL, GetModuleHandle(NULL), NULL);
+				int boolindex = value.c_str()[0];
+				hCEdit = CreateWindow(WC_COMBOBOX, (LPWSTR)_T(""), CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE, pos_left + 2, rekt.top - 2, 100, height, hwnd, NULL, hInst, NULL);
+				AllocWindowUserData(hCEdit, (LONG)ComboProc, 0);
 
-				SendMessage(hCEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
-				SendMessage(hCEdit, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)bools[boolindex].c_str());
-				SendMessage(hCEdit, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)(boolindex == 0 ? bools[1].c_str() : bools[0].c_str()));
+				SendMessage(hCEdit, WM_SETFONT, (WPARAM)hListFont, TRUE);
+				SendMessage(hCEdit, (uint32_t)CB_ADDSTRING, (WPARAM)0, (LPARAM)bools[boolindex].c_str());
+				SendMessage(hCEdit, (uint32_t)CB_ADDSTRING, (WPARAM)0, (LPARAM)(boolindex == 0 ? bools[1].c_str() : bools[0].c_str()));
 				SendMessage(hCEdit, CB_SETCURSEL, 0, 0);
-				DefaultComboProc = (WNDPROC)SetWindowLong(hCEdit, GWL_WNDPROC, (LONG)ComboProc);
 				break;
 			}
-			case ID_TRANSFORM:
+			case EntryValue::Transform:
 			{
-				if (!IsWindow(hTransform))
-				{
-					iItem = itemclicked.iItem;
-					iSubItem = itemclicked.iSubItem;
-					EnableWindow(hDialog, FALSE);
-					hTransform = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TRANSFORM), hDialog, TransformProc);
-					ShowWindow(hTransform, SW_SHOW);
-				}
+				EnableWindow(hDialog, FALSE);
+				HWND hTransform = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TRANSFORM), hDialog, TransformProc);
+				ShowWindow(hTransform, SW_SHOW);
 				break;
 			}
-			case ID_COLOR:
+			case EntryValue::Color:
+			case EntryValue::Vector3:
 			{
-				if (!IsWindow(hColor))
-				{
-					iItem = itemclicked.iItem;
-					iSubItem = itemclicked.iSubItem;
-					EnableWindow(hDialog, FALSE);
-					hColor = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_COLOR), hDialog, ColorProc, TRUE);
-					//hColor = CreateDialog(hInst, MAKEINTRESOURCE(IDD_COLOR), hDialog, ColorProc);
-					ShowWindow(hColor, SW_SHOW);
-				}
+				EnableWindow(hDialog, FALSE);
+				HWND hVector = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_COLOR), hDialog, ColorProc, type == EntryValue::Color);
+				ShowWindow(hVector, SW_SHOW);
 				break;
 			}
-			case ID_VECTOR:
+			default:
 			{
-				if (!IsWindow(hColor))
-				{
-					iItem = itemclicked.iItem;
-					iSubItem = itemclicked.iSubItem;
-					EnableWindow(hDialog, FALSE);
-					hColor = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_VECTOR), hDialog, ColorProc, NULL);
-					ShowWindow(hColor, SW_SHOW);
-				}
-				break;
-			}
-			case ID_STRINGL:
-			{
-				if (!IsWindow(hString))
-				{
+				Header *hdr = &(variables[indextable[itemclicked.iItem].second].header);
+				if (!hdr->IsContainer())
+					break;
 
-					iItem = itemclicked.iItem;
-					iSubItem = itemclicked.iSubItem;
-					EnableWindow(hDialog, FALSE);
-					hString = CreateDialog(hInst, MAKEINTRESOURCE(IDD_STRING), hDialog, StringProc);
-					ShowWindow(hString, SW_SHOW);
-				}
+				if (hdr->GetValueType() != EntryValue::String || (hdr->GetContainerType() != EntryContainer::List && hdr->GetContainerType() != EntryContainer::Dictionary))
+					break;
+
+				if (hdr->GetContainerKeyType() != EntryValue::Null && hdr->GetContainerKeyType() != EntryValue::String)
+					break;
+
+				EnableWindow(hDialog, FALSE);
+				HWND hContainer = CreateDialog(hInst, MAKEINTRESOURCE(IDD_CONTAINER), hDialog, ContainerEditProc);
+				ShowWindow(hContainer, SW_SHOW);
 				break;
 			}
 			}
 		}
 		return 0;
-		break;
 	}
-
+	case WM_MOUSEMOVE:
+	{
+		static std::wstring prevTypeStr;
+		std::wstring TypeStr = L"";
+		LVHITTESTINFO htnfo;
+		htnfo.pt.x = (long)GET_X_LPARAM(lParam);
+		htnfo.pt.y = (long)GET_Y_LPARAM(lParam);
+		const int lResult = ListView_SubItemHitTest(hwnd, &htnfo);
+		if (lResult >= 0)
+			TypeStr = variables[indextable[lResult].second].GetTypeDisplayString();
+		if (TypeStr != prevTypeStr)
+		{
+			ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT2), hDialog);
+			SendMessage(GetDlgItem(hDialog, IDC_OUTPUT2), WM_SETTEXT, 0, (LPARAM)TypeStr.c_str());
+			prevTypeStr = TypeStr;
+		}
+		return TRUE;
+	}
 	case WM_L2CONTEXTMENU:
 	{
 		HMENU hPopupMenu = CreatePopupMenu();
-		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | ((!variables[indextable[iItem].index2].IsModified() && !variables[indextable[iItem].index2].IsRemoved()) ? MF_DISABLED : 0), ID_RESET, _T("Reset"));
-		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | (variables[indextable[iItem].index2].IsRemoved() ? MF_DISABLED : 0), ID_DELETE, _T("Delete"));
-		//SetForegroundWindow(hwnd);
-		BOOL fuck = TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, lParam, wParam, hwnd, NULL);
+		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | ((!variables[indextable[iItem].second].IsModified() && !variables[indextable[iItem].second].IsRemoved()) ? MF_DISABLED : 0), ID_RESET, _T("Reset"));
+		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | (variables[indextable[iItem].second].IsRemoved() ? MF_DISABLED : 0), ID_DELETE, _T("Delete"));
+		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, lParam, wParam, hwnd, NULL);
 		DestroyMenu(hPopupMenu);
+
+		// Clear selection / focus of listitem (blue highlight)
+		RECT rekt;
+		GetWindowRect(hwnd, &rekt);
+		
+		LVHITTESTINFO itemclicked;
+		itemclicked.pt.x = lParam - rekt.left;
+		itemclicked.pt.y = wParam - rekt.top;
+		const int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
+		if (lResult != -1)
+		{
+			LVITEM lvitem;
+			lvitem.stateMask = LVIS_FOCUSED | LVIS_SELECTED;
+			lvitem.state = (uint32_t)0;
+			SendMessage(hwnd, LVM_SETITEMSTATE, iItem, (WPARAM)&lvitem);
+		}
 		break;
 	}
-
+	case WM_SIZE:
+	{
+		ListView_SetColumnWidth(hwnd, 1, LOWORD(lParam) - SendMessage(hwnd, LVM_GETCOLUMNWIDTH, 0, 0) - GetSystemMetrics(SM_CXVSCROLL));
+		return FALSE;
+	}
 	case WM_COMMAND:
 	{
 		// handle hcedits messages in here because I'm messy like that 
 		if (HIWORD(wParam) == CBN_SELCHANGE)
 		{
-			int ItemIndex = SendMessage((HWND)lParam, (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-			int oSize = SendMessage((HWND)lParam, (UINT)CB_GETLBTEXTLEN, (WPARAM)ItemIndex, 0) + 1;
-			std::wstring value(oSize - 1, '\0');
-			(TCHAR)SendMessage((HWND)lParam, (UINT)CB_GETLBTEXT, (WPARAM)ItemIndex, (LPARAM)value.data());
-
+			const int ItemIndex = SendMessage((HWND)lParam, (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			const int oSize = SendMessage((HWND)lParam, (uint32_t)CB_GETLBTEXTLEN, (WPARAM)ItemIndex, 0);
+			std::wstring value(oSize, '\0');
+			SendMessage((HWND)lParam, (uint32_t)CB_GETLBTEXT, (WPARAM)ItemIndex, (LPARAM)value.data());
 			SendMessage(hCEdit, CB_RESETCONTENT, 0, 0);
 			ShowWindow(hCEdit, SW_HIDE);
-			UpdateValue(value, indextable[iItem].index2);
+			SendMessage(hCEdit, WM_CLOSE, 0, 0);
+			UpdateValue(value, indextable[iItem].second);
 			break;
 		}
-		
-		switch (LOWORD(wParam))
+		if (HIWORD(wParam) == BN_CLICKED)
 		{
-			case ID_RESET:
+			if (LOWORD(wParam) == IDC_BUTNEGINF || LOWORD(wParam) == IDC_BUTPOSINF)
 			{
-				UINT index = indextable[iItem].index2;
-
-				variables[index].SetRemoved(FALSE);
-				UpdateValue(_T(""), index, variables[index].static_value);
-				break;
-			}
-			case ID_DELETE:
-			{
-				UINT index = indextable[iItem].index2;
-				Variables_remove(indextable[iItem].index2);
+				if (hEdit != NULL)
+				{
+					int fuck = 1;
+				}
 				break;
 			}
 		}
+		switch (LOWORD(wParam))
+		{
+		case ID_RESET:
+		{
+			const uint32_t index = indextable[iItem].second;
+
+			variables[index].SetRemoved(FALSE);
+			UpdateValue(_T(""), index, variables[index].static_value);
+			break;
+		}
+		case ID_DELETE:
+		{
+			const uint32_t index = indextable[iItem].second;
+			Variables_remove(indextable[iItem].second);
+			break;
+		}
+		}
+		break;
 	}
 	}
 	return CallWindowProc(DefaultListCtrlProc, hwnd, message, wParam, lParam);
 }
 
-BOOL CALLBACK ReportProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
 	case WM_INITDIALOG:
 	{
-		DWORD dwDlgBase = GetDialogBaseUnits();
-		int cxMargin = LOWORD(dwDlgBase) / 4;
-		int cyMargin = HIWORD(dwDlgBase) / 8;
+		const DWORD dwDlgBase = GetDialogBaseUnits();
+		const int cxMargin = GET_X_LPARAM(dwDlgBase) / 4;
+		const int cyMargin = GET_Y_LPARAM(dwDlgBase) / 8;
 
 		TCITEM tie;
 		RECT rcTab;
@@ -2141,7 +2600,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			0, 0, 100, 100,
 			hwnd, NULL, hInst, NULL
 		);
-		SendMessage(pHdr->hwndTab, WM_SETFONT, (WPARAM)hFont, TRUE);
+		SendMessage(pHdr->hwndTab, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 		if (pHdr->hwndTab == NULL)
 		{
@@ -2241,7 +2700,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hwnd, GWL_USERDATA);
 
 			// Get the index of the selected tab.
-			int iSel = TabCtrl_GetCurSel(pHdr->hwndTab);
+			const int iSel = TabCtrl_GetCurSel(pHdr->hwndTab);
 
 			// Destroy the current child dialog box, if any. 
 			if (pHdr->hwndDisplay != NULL)

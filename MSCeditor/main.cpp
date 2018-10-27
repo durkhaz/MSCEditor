@@ -4,18 +4,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 {
 	hInst = hInstance;
 	ResizeDialogInitialize(hInst);
-
-	return DialogBox(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc);
+	return DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc, (LPARAM)lpCmdLine);
 } 
 
-BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	ResizeDialogProc(hwnd, Message, wParam, lParam, &pResizeState);
 	switch (Message)
 	{
 		case WM_INITDIALOG:
 		{
-			#ifdef _DEBUG
+#ifdef _DEBUG
 			// Alloc debug console
 			AllocConsole();
 			std::wstring cTitle = Title + _T(" Debug Console");
@@ -45,8 +44,11 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
 
 			std::wcout << cTitle << _T(" successfully allocated.") << std::endl;
-			#endif
 
+			// Log
+			dbglog = new DebugOutput(L"log.txt");
+			dbglog->LogNoConsole(L"~~~\n\nNEW LOG INSTANCE\n\n~~~\n");
+#endif
 
 			//init common controls
 			INITCOMMONCONTROLSEX iccex;
@@ -59,29 +61,21 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				EndDialog(hwnd, 0);
 			}
 
-			LOGFONT lf;
-			GetObject(GetStockObject(DEFAULT_GUI_FONT), sizeof(LOGFONT), &lf);
-			hFont = CreateFont(lf.lfHeight, lf.lfWidth,
-				lf.lfEscapement, lf.lfOrientation, lf.lfWeight,
-				lf.lfItalic, lf.lfUnderline, lf.lfStrikeOut, lf.lfCharSet,
-				lf.lfOutPrecision, lf.lfClipPrecision, lf.lfQuality,
-				lf.lfPitchAndFamily, lf.lfFaceName);
-
+			hListFont = (HFONT)SendMessage(GetDlgItem(hwnd, IDC_List), WM_GETFONT, 0, 0);
 			hDialog = hwnd;
-			
+
 			ListView_SetBkColor(GetDlgItem(hwnd, IDC_List), (COLORREF)GetSysColor(COLOR_MENU));
 			ListView_SetBkColor(GetDlgItem(hwnd, IDC_List2), (COLORREF)GetSysColor(COLOR_MENU));
 
-			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_FULLROWSELECT);
-			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_DOUBLEBUFFER);
-			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_BORDERSELECT);
+			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_BORDERSELECT);
+			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List2), LVS_EX_GRIDLINES);
 			
 			DefaultListCtrlProc = (WNDPROC)SetWindowLong(GetDlgItem(hwnd, IDC_List2), GWL_WNDPROC, (LONG)ListCtrlProc);
 			DefaultListViewProc = (WNDPROC)SetWindowLong(GetDlgItem(hwnd, IDC_List), GWL_WNDPROC, (LONG)ListViewProc);
 
+			// Set Icon and title
 			HICON hicon = static_cast<HICON>(LoadImage(hInst, MAKEINTRESOURCE(IDI_ICON1), IMAGE_ICON, 0, 0, LR_DEFAULTCOLOR | LR_SHARED | LR_DEFAULTSIZE));
 			SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
-
 			SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 
 			//load inifile
@@ -98,7 +92,11 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			if (bCheckForUpdate)
 			{
 				std::wstring path; 
+#ifdef _DEBUG
+				if (!DownloadUpdatefile(L"", path))
+#else
 				if (!DownloadUpdatefile(L"http://mscedit.superskalar.org/current", path))
+#endif
 				{
 					std::wstring link, changelog;
 					if (CheckUpdate(path, link, changelog))
@@ -116,12 +114,39 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				}
 			}
 		
-			//apply settings
+			// Apply settings
 			if (!bMakeBackup)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 0), MF_UNCHECKED);
 			if (!bCheckForUpdate)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED);
+			if (!bEulerAngles)
+				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED);
+			if (!bDisplayRawNames)
+				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_UNCHECKED);
 
+			// If we got a path from the command line, try to open
+			// Make sure this is at the end of InitDialog because it contains breaks
+			std::wstring InitFile = StringToWString(std::string((LPSTR)lParam));
+			if (!InitFile.empty())
+			{
+				uint32_t found = InitFile.find_last_of('\\');
+				if (found != std::string::npos)
+				{
+					// Check if we have an actual file at our hands
+					HANDLE hTest = CreateFile(InitFile.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, NULL, NULL);
+					if (hTest == INVALID_HANDLE_VALUE)
+						break;
+
+					LARGE_INTEGER fSize;
+					if (!GetFileSizeEx(hTest, &fSize))
+						break;
+
+					CloseHandle(hTest);
+					filename = InitFile.substr(found + 1);
+					filepath = InitFile;
+					InitMainDialog(hDialog);
+				}
+			}
 			break;
 		}
 		case WM_NOTIFY:
@@ -137,13 +162,15 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 						result = CDRF_NOTIFYITEMDRAW;
 						break;
 					case CDDS_ITEMPREPAINT:
-						if (variables[indextable[lplvcd->nmcd.dwItemSpec].index2].IsRemoved())
-							lplvcd->clrText = RGB(128, 128, 128);
-						else if (variables[indextable[lplvcd->nmcd.dwItemSpec].index2].IsModified() || variables[indextable[lplvcd->nmcd.dwItemSpec].index2].IsAdded())
-							lplvcd->clrText = RGB(255, 0, 0);
-
+					{
+						int index = lplvcd->nmcd.dwItemSpec > indextable.size() - 1 ? indextable.size() - 1 : lplvcd->nmcd.dwItemSpec;
+						if (variables[indextable[index].second].IsRemoved())
+						lplvcd->clrText = RGB(128, 128, 128);
+						else if (variables[indextable[index].second].IsModified() || variables[indextable[index].second].IsAdded())
+						lplvcd->clrText = RGB(255, 0, 0);
 						result = CDRF_NEWFONT;
 						break;
+					}
 				}
 				SetWindowLongPtr(hDialog, DWLP_MSGRESULT, result);
 				return TRUE;
@@ -194,25 +221,24 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				ListView_GetItem(hList1, (LPARAM)&lvi);
 
 				ListParam* listparam = (ListParam*)lvi.lParam;
-				UINT group = (UINT)listparam->GetIndex();
+				uint32_t group = (uint32_t)listparam->GetIndex();
 				SendMessage(hList2, LVM_DELETEALLITEMS, 0, 0);
 				indextable.clear();
 				int item = 0;
-				for (UINT i = 0; i < variables.size(); i++)
+				for (uint32_t i = 0; i < variables.size(); i++)
 				{
 					if (variables[i].group == group)
 					{
 						LVITEM lvi;
-						std::wstring value;
-						FormatString(value, variables[i].value, variables[i].type);
+						std::wstring value = variables[i].GetDisplayString();
 
 						lvi.mask = LVIF_TEXT | LVIF_STATE; lvi.state = 0; lvi.stateMask = 0;
 						lvi.iItem = item; lvi.iSubItem = 0; lvi.pszText = (LPWSTR)value.c_str();
 						int uindex = SendMessage(hList2, LVM_INSERTITEM, 0, (LPARAM)&lvi);
 
-						indextable.push_back(IndexLookup(uindex, i));
+						indextable.push_back(std::pair<uint32_t, uint32_t>(uindex, i));
 
-						lvi.iItem = item; lvi.iSubItem = 1; lvi.pszText = (LPWSTR)variables[i].key.c_str();
+						lvi.iItem = item; lvi.iSubItem = 1; lvi.pszText = (LPWSTR)(bDisplayRawNames ? variables[i].raw_key : variables[i].key).c_str();
 						SendMessage(hList2, LVM_SETITEM, 0, (LPARAM)&lvi);
 						item++;
 					}
@@ -230,10 +256,8 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				busy = TRUE;
 				busy = FileChanged();
 			}
-				
 			break;
 		}
-
 		case WM_COMMAND:
 		{
 			switch (LOWORD(wParam))
@@ -291,7 +315,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 							wstring key = strInput.substr(startpos, endpos - startpos);
 							if (ContainsStr(key, L"BaseInstallFolder"))
 							{
-								UINT _i = endpos + 1;
+								uint32_t _i = endpos + 1;
 
 								if (FetchDataFileParameters(strInput.substr(_i), startpos, endpos) == 0)
 								{
@@ -302,13 +326,12 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 						}
 					}
 						
-					for (UINT i = 0; i < basefolders.size(); ++i)
+					for (uint32_t i = 0; i < basefolders.size(); ++i)
 					{
 						if ((int)ShellExecute(NULL, _T("open"), (basefolders[i] + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT) > 32) break;
 					}
 					break;
 				}
-
 				case ID_OPTIONS_MAKEBACKUP:
 				{
 					if (bMakeBackup)
@@ -327,25 +350,44 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				}
 				case ID_OPTIONS_CHECKFORUPDATES:
 				{
-					bCheckForUpdate = (MF_CHECKED == (bCheckForUpdate ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED)) ? FALSE : TRUE);
+					bCheckForUpdate = MF_CHECKED != (bCheckForUpdate ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 1), MF_CHECKED));
 					break;
 				}
 				case ID_OPTIONS_USEEULERANGLES:
 				{
-					bEulerAngles = (MF_CHECKED == (bEulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_CHECKED)) ? FALSE : TRUE);
+					bEulerAngles = MF_CHECKED != (bEulerAngles ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_CHECKED));
+					break;
+				}
+				case ID_OPTIONS_DISPLAYRAWNAMES:
+				{
+					bDisplayRawNames = MF_CHECKED != (bDisplayRawNames ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_CHECKED));
+					int index = SendMessage(GetDlgItem(hwnd, IDC_List), LVM_GETSELECTIONMARK, 0, 0);
+					if (index < 0)
+						break;
+					NMHDR nmhdr = { GetDlgItem(hwnd, IDC_List), IDC_List, LVN_ITEMCHANGED };
+					NMLISTVIEW nmlv = { nmhdr , index , 0 , 0 , 0 , 0 , 0 , 0 };
+					SendMessage(hwnd, WM_NOTIFY, nmhdr.idFrom, (LPARAM)&nmlv);
 					break;
 				}
 				case ID_FILE_SAVE:
 				{
+					std::vector<Issue> issues;
+					PopulateCarparts();
+					if (SaveHasIssues(issues))
+					{
+						std::wstring buffer(256, '\0');
+						swprintf(&buffer[0], 256, GLOB_STRS[38].c_str(), issues.size());
+						if (MessageBox(hDialog, buffer.c_str(), ErrorTitle.c_str(), MB_YESNO | MB_ICONWARNING) == IDYES)
+						{
+							SendMessage(hDialog, WM_COMMAND, MAKEWPARAM(ID_TOOLS_ISSUEDIAGNOSTICS, 0), reinterpret_cast<LPARAM>(&issues));
+							break;
+						}
+					}
 					int result = SaveFile();
 					if (result > 0)
-					{
 						MessageBox(hDialog, (GLOB_STRS[12] + GLOB_STRS[12 + result]).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
-					}
 					else
-					{
 						InitMainDialog(hDialog);
-					}
 					break;
 				}
 				case ID__HELP:
@@ -362,12 +404,9 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 				}
 				case ID_TOOLS_TELEPORTENTITY:
 				{
-					if (!IsWindow(hTeleport))
-					{
-						EnableWindow(hDialog, FALSE);
-						hTeleport = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TELEPORT), hDialog, TeleportProc);
-						ShowWindow(hTeleport, SW_SHOW);
-					}
+					EnableWindow(hDialog, FALSE);
+					HWND hTeleport = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TELEPORT), hDialog, TeleportProc);
+					ShowWindow(hTeleport, SW_SHOW);
 					break;
 				}
 				case ID_TOOLS_REPORT:
@@ -380,6 +419,29 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					}
 					break;
 				}
+				case ID_TOOLS_ISSUEDIAGNOSTICS:
+				{
+					bool bHasIssues = TRUE;
+					std::vector<Issue> issues;
+					if (lParam == 0)
+					{
+						PopulateCarparts();
+						bHasIssues = SaveHasIssues(issues);
+					}
+					if (bHasIssues)
+					{
+						EnableWindow(hwnd, FALSE);
+						HWND hIssues = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_KEYS), hDialog, IssueProc, lParam == 0 ? reinterpret_cast<LPARAM>(&issues) : lParam);
+						ShowWindow(hIssues, SW_SHOW);
+					}
+					else
+					{
+						std::wstring buffer(128, '\0');
+						swprintf(&buffer[0], 128, GLOB_STRS[50].c_str(), 0, GLOB_STRS[51].c_str());
+						MessageBox(hwnd, &buffer[0], Title.c_str(), MB_OK);
+					}
+					break;
+				}
 				case ID_TOOLS_DUMP:
 				{
 					if (variables.size() == 0) break;
@@ -387,11 +449,10 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 
 
-					for (UINT i = 0; i < variables.size(); i++)
+					for (uint32_t i = 0; i < variables.size(); i++)
 					{
-						std::wstring str;
-						FormatString(str, variables[i].value, variables[i].type);
-						dump << (L"\"" + variables[i].key + L"\" \"" + str + L"\"\n");
+						std::wstring str = variables[i].GetDisplayString();
+						dump << (L"\"" + StringToWString(variables[i].key) + L"\" \"" + str + L"\"\n");
 					}
 
 					if (dump.bad() || dump.fail())
@@ -404,8 +465,6 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 						MessageBox(hwnd, GLOB_STRS[40].c_str(), Title.c_str(), MB_OK );
 					}
 					dump.close();
-
-					
 					break;
 				}
 				case ID_ITEMS_SPAWNITEMS:
@@ -422,12 +481,19 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 					ShowWindow(hWnd, SW_SHOW);
 					break;
 				}
+				case ID_TOOLS_TIMEANDWEATHER:
+				{
+					EnableWindow(hDialog, FALSE);
+					HWND hWnd = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TIMEWEATHER), hDialog, TimeWeatherProc);
+					ShowWindow(hWnd, SW_SHOW);
+					break;
+				}
 			}
 			
 			// FILTER
 			if ((HIWORD(wParam) == EN_UPDATE) && (LOWORD(wParam) == IDC_FILTER))
 			{
-				UINT size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
+				uint32_t size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
 				std::wstring str(size, '\0');
 				GetWindowText(GetDlgItem(hwnd, IDC_FILTER), (LPWSTR)str.data(), size);
 				str.resize(size - 1);
@@ -438,15 +504,22 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			}
 		} 
 		case WM_SIZE:
+		{
 			ClearStatic(GetDlgItem(hwnd, IDC_STXT1), hDialog);
 			ClearStatic(GetDlgItem(hwnd, IDC_STXT2), hDialog);
 			break;
-
+		}
 		case WM_CTLCOLORSTATIC:
 			if ((HWND)lParam == GetDlgItem(hDialog, IDC_OUTPUT3))
 			{
 				SetBkMode((HDC)wParam, COLOR_WINDOW);
 				WasModified() ? SetTextColor((HDC)wParam, RGB(255, 0, 0)): SetTextColor((HDC)wParam, RGB(0, 0, 0));
+				return (BOOL)GetSysColorBrush(COLOR_WINDOW);
+			}
+			else if ((HWND)lParam == GetDlgItem(hDialog, IDC_OUTPUT4))
+			{
+				SetBkMode((HDC)wParam, COLOR_WINDOW);
+				SetTextColor((HDC)wParam, RGB(255, 0, 0));
 				return (BOOL)GetSysColorBrush(COLOR_WINDOW);
 			}
 			else
@@ -468,6 +541,10 @@ BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
 			if (CanClose())
 			{
 				SaveSettings(IniFile);
+				DeleteObject(hListFont);
+#ifdef _DEBUG
+				delete dbglog;
+#endif
 				EndDialog(hDialog, 0);
 			}
 			break;

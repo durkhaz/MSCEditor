@@ -21,8 +21,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <iostream>
-//#include <crtdbg.h>
-//#include <conio.h>
 #endif
 
-BOOL CALLBACK DlgProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
+
+BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
