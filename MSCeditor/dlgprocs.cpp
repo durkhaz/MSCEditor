@@ -42,11 +42,11 @@ DLGTEMPLATEEX* DoLockDlgRes(LPCTSTR lpszResName)
 void AllocWindowUserData(HWND hwnd, LONG DefProc, uint32_t id = 0, COLORREF clr = RGB(255, 255, 255), uint32_t dat = 0)
 {
 	PLID *plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
-	plID->hDefProc = (WNDPROC)SetWindowLong(hwnd, GWL_WNDPROC, DefProc);
+	plID->hDefProc = (WNDPROC)SetWindowLongPtr(hwnd, GWL_WNDPROC, DefProc);
 	plID->cColor = clr;
 	plID->nPID = id;
 	plID->dat = dat;
-	SetWindowLong(hwnd, GWL_USERDATA, (LONG)plID);
+	SetWindowLongPtr(hwnd, GWL_USERDATA, (LONG)plID);
 }
 
 inline void ShowBalloontip(HWND hwnd, uint32_t msgIndex)
@@ -378,7 +378,7 @@ BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM
 				::EnableWindow(hTime, FALSE);
 			else
 			{
-				const int fuck = *(int*)(variables[EntryIndex].value.data()) + 2;
+				const int fuck = *reinterpret_cast<const int*>(variables[EntryIndex].value.data()) + 2;
 				const int worldtime = fuck > 24 ? 2 : fuck;
 				int time = 2;
 				while (time <= 24)
@@ -403,7 +403,7 @@ BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM
 				::EnableWindow(hDay, FALSE);
 			else
 			{
-				const int worldday = *(int*)(variables[EntryIndex].value.data()) - 1;
+				const int worldday = *reinterpret_cast<const int*>(variables[EntryIndex].value.data()) - 1;
 				int entry = 0;
 				for (auto& day : { L"Monday", L"Tuesday", L"Wednesday", L"Thursday", L"Friday", L"Saturday", L"Sunday" })
 				{
@@ -793,7 +793,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 		{
 			int pagesize = static_cast<int>(pow(ScrollRekt.bottom, 2)/ wParam);
 			SCROLLINFO si = {};
-			ZeroMemory(&si, sizeof(SCROLLINFO));
+			SecureZeroMemory(&si, sizeof(SCROLLINFO));
 			si.cbSize = sizeof(SCROLLINFO);
 			si.fMask = SIF_ALL;
 			si.nMax = windowsize + pagesize;
@@ -870,7 +870,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 	{
 		// Create the child list
 		const int ListWidth = 380;
-		HWND hProperties = CreateDialog(hInst, MAKEINTRESOURCE(IDD_PROPERTYLIST), hwnd, PropertyListProc);
+		HWND hProperties = CreateDialog(hInst, MAKEINTRESOURCE(IDD_BLANK), hwnd, PropertyListProc);
 		ShowWindow(hProperties, SW_SHOW);
 		SetWindowPos(hProperties, NULL, 12, 13, ListWidth, 423, SWP_SHOWWINDOW);
 
@@ -1059,6 +1059,7 @@ BOOL CALLBACK ReportChildrenProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 
 BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
+	static std::string TargetLocationBin;
 	static std::vector<uint32_t> vfrom;
 	static std::vector<std::pair<uint32_t, uint32_t>> vto;
 
@@ -1066,23 +1067,37 @@ BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 	{
 	case WM_INITDIALOG:
 	{
-		for (uint32_t i = 0; i < locations.size(); i++)
-		{
-			SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.c_str());
-			vto.push_back(std::pair<uint32_t, uint32_t>(0, i));
-		}
+		if (lParam == 0)
+			TargetLocationBin.clear();
+		else
+			TargetLocationBin = std::move(*reinterpret_cast<std::string*>(lParam));
+
+		if (TargetLocationBin.empty())
+			for (uint32_t i = 0; i < locations.size(); i++)
+			{
+				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.first.c_str());
+				vto.push_back(std::pair<uint32_t, uint32_t>(0, i));
+			}
 
 		for (uint32_t i = 0; i < variables.size(); i++)
 		{
 			if (variables[i].header.IsNonContainerOfValueType(EntryValue::Transform))
 			{
 				SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
-				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
-				vto.push_back(std::pair<uint32_t, uint32_t>(1, i));
+				if (TargetLocationBin.empty())
+				{
+					SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)variables[i].key.c_str());
+					vto.push_back(std::pair<uint32_t, uint32_t>(1, i));
+				}
 				vfrom.push_back(i);
 			}
 		}
-
+		if (!TargetLocationBin.empty())
+		{
+			SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)Variable::ValueBinToStr(TargetLocationBin, EntryValue::Vector3).c_str());
+			SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_SETCURSEL, 0, 0);
+			::EnableWindow(GetDlgItem(hwnd, IDC_LOCTO), FALSE);
+		}
 		HWND hOffset = GetDlgItem(hwnd, IDC_OFFSET);
 		SendMessage(hOffset, EM_SETLIMITTEXT, 12, 0);
 		SendMessage(hOffset, WM_SETTEXT, 0, (LPARAM)_T("0"));
@@ -1116,9 +1131,15 @@ BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 			std::string binfrom = variables[varindex].value;
 
 			// Get binary of teleportation destination transform
-			index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-			bool bIsFileLocation = vto[index].first == 0;
-			std::string binto = bIsFileLocation ? locations[vto[index].second].second : variables[vto[index].second].value;
+			std::string binto = binfrom;
+			if (TargetLocationBin.empty())
+			{
+				index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				bool bIsFileLocation = vto[index].first == 0;
+				binto = bIsFileLocation ? locations[vto[index].second].second : variables[vto[index].second].value;
+			}
+			else
+				binto.replace(1, TargetLocationBin.size(), TargetLocationBin);
 
 			// Add height offset if it has any
 			if (offset > 0)
@@ -1596,7 +1617,7 @@ BOOL CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPAR
 		// Entries
 		const Variable *var = &variables[indextable[iItem].second];
 		const std::string *str = &var->value;
-		const uint32_t num = *((int*)(str->data()));
+		const uint32_t num = *reinterpret_cast<const int*>(str->data());
 		uint32_t offset = 4;
 		LVITEM lvi;
 		for (uint32_t i = 0; i < num; i++)
@@ -1737,7 +1758,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 		{
 			int pagesize = static_cast<int>(pow(ScrollRekt.bottom, 2) / wParam);
 			SCROLLINFO si = {};
-			ZeroMemory(&si, sizeof(SCROLLINFO));
+			SecureZeroMemory(&si, sizeof(SCROLLINFO));
 			si.cbSize = sizeof(SCROLLINFO);
 			si.fMask = SIF_ALL;
 			si.nMax = windowsize + pagesize;
@@ -1800,9 +1821,9 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 		const int ListWidth = rekt.right - rekt.left - 2 * BorderMargin;
 		const int ListHeight = rekt.bottom - rekt.top - 37 - 2 * BorderMargin;
 
-		hKeys = CreateDialog(hInst, MAKEINTRESOURCE(IDD_KEYLIST), hwnd, KeyListProc);
-		ShowWindow(hKeys, SW_SHOW);
+		hKeys = CreateDialog(hInst, MAKEINTRESOURCE(IDD_BLANK), hwnd, KeyListProc);
 		SetWindowPos(hKeys, NULL, BorderMargin, BorderMargin, ListWidth, ListHeight, SWP_SHOWWINDOW);
+		ShowWindow(hKeys, SW_SHOW);
 
 		TEXTMETRIC tm;
 		HDC hdc = GetDC(hwnd);
@@ -1821,7 +1842,7 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 			// Get the result
-			const int Result = *((int*)(variables[EntryExists(KeyNames[index])].value.substr(0, 4).data()));
+			const int Result = *reinterpret_cast<const int*>(variables[EntryExists(KeyNames[index])].value.substr(0, 4).data());
 
 			// Get the multiplier
 			std::wstring MultiplierStr = Variable::ValueBinToStr(variables[EntryExists(std::wstring(L"keycheck"))].value, EntryValue::Integer);
@@ -1830,7 +1851,7 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 
 			// Get the base value
 			const std::string BaseValue = variables[EntryExists(LocationName)].value.substr(1);
-			const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
+			const int Base = static_cast<int>(*reinterpret_cast<const float*>(BaseValue.substr(0, 4).data()) + 2.f * *reinterpret_cast<const float*>(BaseValue.substr(4, 4).data()) + *reinterpret_cast<const float*>(BaseValue.substr(8, 4).data()));
 			
 			// If the result is correct, check the box
 			if ((Base * Multiplier) == Result)
@@ -1863,11 +1884,11 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 						continue;
 
 					const int ResultIndex = EntryExists(KeyNames[index]);
-					const int Result = *((int*)(variables[ResultIndex].value.substr(0, 4).data()));
+					const int Result = *reinterpret_cast<const int*>(variables[ResultIndex].value.substr(0, 4).data());
 					std::wstring MultiplierStr = Variable::ValueBinToStr(variables[EntryExists(L"keycheck")].value, EntryValue::Integer);
 					const int Multiplier = std::stoi(MultiplierStr, NULL);
 					const std::string BaseValue = variables[EntryExists(LocationName)].value.substr(1);
-					const int Base = (int)(*((float*)(BaseValue.substr(0, 4).data())) + 2 * *((float*)(BaseValue.substr(4, 4).data())) + *((float*)(BaseValue.substr(8, 4).data())));
+					const int Base = static_cast<int>(*reinterpret_cast<const float*>(BaseValue.substr(0, 4).data()) + 2.f * *reinterpret_cast<const float*>(BaseValue.substr(4, 4).data()) + *reinterpret_cast<const float*>(BaseValue.substr(8, 4).data()));
 
 					if (IsDlgButtonChecked(hKeys, index) == BST_CHECKED && Base * Multiplier != Result)
 					{
@@ -1914,8 +1935,7 @@ BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPara
 		const int ListWidth = rekt.right - rekt.left - 2 * BorderMargin;
 		const int ListHeight = rekt.bottom - rekt.top - 37 - 2 * BorderMargin;
 
-		hList = CreateDialog(hInst, MAKEINTRESOURCE(IDD_KEYLIST), hwnd, KeyListProc);
-		ShowWindow(hList, SW_SHOW);
+		hList = CreateDialog(hInst, MAKEINTRESOURCE(IDD_BLANK), hwnd, KeyListProc);
 		SetWindowPos(hList, NULL, BorderMargin, BorderMargin, ListWidth, ListHeight, SWP_SHOWWINDOW);
 
 		TEXTMETRIC tm;
@@ -2015,7 +2035,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 
 			for (uint32_t i = 0; i < locations.size(); i++)
 			{
-				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.c_str());
+				SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_ADDSTRING, 0, (LPARAM)locations[i].first.first.c_str());
 			}
 
 			for (uint32_t i = 0; i < variables.size(); i++)
@@ -2074,16 +2094,16 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 					
 					index = EntryExists(itemTypes[index_what].GetID());
 					const bool bNewIdEntry = (index == UINT_MAX);
+					std::wstring SanitizedID = *SanitizeTagStr(itemTypes[index_what].GetID());
+
+					// If the ID entry is missing, we create it
 					if (bNewIdEntry)
-					{
-						// The ID entry is missing, so we create it
-						std::wstring SanitizedID = itemTypes[index_what].GetID();
-						Variables_add(Variable(Header(EntryValue::Integer), IntToBin(0), UINT_MAX, itemTypes[index_what].GetID(), *SanitizeTagStr(SanitizedID)));
-					}
+						Variables_add(Variable(Header(EntryValue::Ids[EntryValue::Integer].first), IntToBin(0), UINT_MAX, itemTypes[index_what].GetID(), SanitizedID));
+
 					for (uint32_t i = 0; i < (uint32_t)amount; i++)
 					{
 						// We have to refind the ID entry here because it might change after iterations
-						index = EntryExists(itemTypes[index_what].GetID(), !bNewIdEntry);
+						index = EntryExists(SanitizedID);
 
 						if (index == UINT_MAX)
 						{
@@ -2100,7 +2120,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 						std::wstring keyprefix = itemTypes[index_what].GetName() + std::to_wstring(a);
 
 						std::wstring SanitizedTransformKey = keyprefix + itemAttributes[0].GetName();
-						Variables_add(Variable(Header(EntryValue::Transform), location, UINT_MAX, keyprefix + itemAttributes[0].GetName(), *SanitizeTagStr(SanitizedTransformKey)));
+						Variables_add(Variable(Header(EntryValue::Ids[EntryValue::Transform].first), location, UINT_MAX, keyprefix + itemAttributes[0].GetName(), *SanitizeTagStr(SanitizedTransformKey)));
 
 						std::vector<char> attributes = itemTypes[index_what].GetAttributes(itemAttributes.size());
 
@@ -2111,9 +2131,8 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 							std::string bin = Variable::ValueStrToBin(*TruncFloatStr(max), type);
 							
 							std::wstring SanitizedAttributeKey = keyprefix + itemAttributes[(uint32_t)attributes[j]].GetName();
-							Variables_add(Variable(Header(type), bin, UINT_MAX, keyprefix + itemAttributes[(uint32_t)attributes[j]].GetName(), *SanitizeTagStr(SanitizedAttributeKey)));
+							Variables_add(Variable(Header(EntryValue::Ids[type].first), bin, UINT_MAX, keyprefix + itemAttributes[(uint32_t)attributes[j]].GetName(), *SanitizeTagStr(SanitizedAttributeKey)));
 						}
-
 					}
 
 					uint32_t size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
@@ -2497,6 +2516,10 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 		HMENU hPopupMenu = CreatePopupMenu();
 		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | ((!variables[indextable[iItem].second].IsModified() && !variables[indextable[iItem].second].IsRemoved()) ? MF_DISABLED : 0), ID_RESET, _T("Reset"));
 		InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING | (variables[indextable[iItem].second].IsRemoved() ? MF_DISABLED : 0), ID_DELETE, _T("Delete"));
+#ifdef _MAP
+		if (variables[indextable[iItem].second].header.IsNonContainerOfValueType(EntryValue::Transform))
+			InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING, ID_SHOW_ON_MAP, _T("Show on map"));
+#endif
 		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, lParam, wParam, hwnd, NULL);
 		DestroyMenu(hPopupMenu);
 
@@ -2564,6 +2587,13 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 			Variables_remove(indextable[iItem].second);
 			break;
 		}
+#ifdef _MAP
+		case ID_SHOW_ON_MAP:
+		{
+			ShowObjectOnMap(&variables[indextable[iItem].second]);
+			break;
+		}
+#endif
 		}
 		break;
 	}
@@ -2592,7 +2622,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 		DLGHDR *pHdr = (DLGHDR *)LocalAlloc(LPTR, sizeof(DLGHDR));
 
 		// Save a pointer to the DLGHDR structure in the window data of the dialog box. 
-		SetWindowLong(hwnd, GWL_USERDATA, (LONG)pHdr);
+		SetWindowLongPtr(hwnd, GWL_USERDATA, (LONG)pHdr);
 
 		// Create the tab control.
 		pHdr->hwndTab = CreateWindowEx(0, WC_TABCONTROL, 0,

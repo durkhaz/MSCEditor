@@ -1,4 +1,7 @@
 #include "main.h"
+#ifdef _MAP
+#include "map.h"
+#endif /*_MAP*/
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
@@ -43,6 +46,11 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
 			freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
 
+			// Move console over to other screen and maximize, if possible
+			HWND hConsole = GetConsoleWindow();
+			SetWindowPos(hConsole, NULL, 3000, 0, 200, 200, SWP_NOSIZE);
+			ShowWindow(hConsole, SW_MAXIMIZE);
+			
 			std::wcout << cTitle << _T(" successfully allocated.") << std::endl;
 
 			// Log
@@ -62,6 +70,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			}
 
 			hListFont = (HFONT)SendMessage(GetDlgItem(hwnd, IDC_List), WM_GETFONT, 0, 0);
+		 
 			hDialog = hwnd;
 
 			ListView_SetBkColor(GetDlgItem(hwnd, IDC_List), (COLORREF)GetSysColor(COLOR_MENU));
@@ -70,13 +79,21 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_BORDERSELECT);
 			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List2), LVS_EX_GRIDLINES);
 			
-			DefaultListCtrlProc = (WNDPROC)SetWindowLong(GetDlgItem(hwnd, IDC_List2), GWL_WNDPROC, (LONG)ListCtrlProc);
-			DefaultListViewProc = (WNDPROC)SetWindowLong(GetDlgItem(hwnd, IDC_List), GWL_WNDPROC, (LONG)ListViewProc);
+			DefaultListCtrlProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List2), GWL_WNDPROC, (LONG)ListCtrlProc);
+			DefaultListViewProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List), GWL_WNDPROC, (LONG)ListViewProc);
 
 			// Set Icon and title
 			HICON hicon = static_cast<HICON>(LoadImage(hInst, MAKEINTRESOURCE(IDI_ICON1), IMAGE_ICON, 0, 0, LR_DEFAULTCOLOR | LR_SHARED | LR_DEFAULTSIZE));
 			SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
 			SetWindowText(hDialog, (LPCWSTR)Title.c_str());
+
+			// Prepare and set app folder
+			if (FAILED(FindAndCreateAppFolder()))
+			{
+				std::wstring buffer(128, '\0');
+				swprintf(&buffer[0], 128, GLOB_STRS[37].c_str(), appfolderpath.c_str());
+				MessageBox(hwnd, buffer.c_str(), Title.c_str(), MB_OK);
+			}
 
 			//load inifile
 			if (LoadDataFile(IniFile))
@@ -89,7 +106,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 				}
 
 			//check updates
-			if (bCheckForUpdate)
+			if (bCheckForUpdate && !appfolderpath.empty())
 			{
 				std::wstring path; 
 #ifdef _DEBUG
@@ -123,7 +140,13 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 2), MF_UNCHECKED);
 			if (!bDisplayRawNames)
 				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_UNCHECKED);
+			if (!bCheckIssues)
+				CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 4), MF_UNCHECKED);
 
+#ifdef _MAP
+			HMENU menu = GetSubMenu(GetMenu(hDialog), 1);
+			EnableMenuItem(menu, GetMenuItemID(menu, 8), MF_ENABLED);
+#endif /*_MAP*/
 			// If we got a path from the command line, try to open
 			// Make sure this is at the end of InitDialog because it contains breaks
 			std::wstring InitFile = StringToWString(std::string((LPSTR)lParam));
@@ -247,7 +270,6 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			}
 			break;
 		}
-
 		case WM_ACTIVATE:
 		{
 			static bool busy = false;
@@ -369,11 +391,16 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 					SendMessage(hwnd, WM_NOTIFY, nmhdr.idFrom, (LPARAM)&nmlv);
 					break;
 				}
+				case ID_OPTIONS_CHECKISSUESWHENSAVING:
+				{
+					bCheckIssues = MF_CHECKED != (bCheckIssues ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 4), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 4), MF_CHECKED));
+					break;
+				}
 				case ID_FILE_SAVE:
 				{
 					std::vector<Issue> issues;
 					PopulateCarparts();
-					if (SaveHasIssues(issues))
+					if (bCheckIssues && SaveHasIssues(issues))
 					{
 						std::wstring buffer(256, '\0');
 						swprintf(&buffer[0], 256, GLOB_STRS[38].c_str(), issues.size());
@@ -405,7 +432,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 				case ID_TOOLS_TELEPORTENTITY:
 				{
 					EnableWindow(hDialog, FALSE);
-					HWND hTeleport = CreateDialog(hInst, MAKEINTRESOURCE(IDD_TELEPORT), hDialog, TeleportProc);
+					HWND hTeleport = lParam == 0 ? CreateDialog(hInst, MAKEINTRESOURCE(IDD_TELEPORT), hDialog, TeleportProc) : CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_TELEPORT), hwnd, TeleportProc, lParam);
 					ShowWindow(hTeleport, SW_SHOW);
 					break;
 				}
@@ -488,6 +515,15 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 					ShowWindow(hWnd, SW_SHOW);
 					break;
 				}
+#ifdef _MAP
+				case ID_TOOLS_WORLDMAP:
+				{
+
+					if (!EditorMap)
+						EditorMap = new MapDialog();
+					break;
+				}
+#endif /*_MAP*/
 			}
 			
 			// FILTER
@@ -544,7 +580,12 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 				DeleteObject(hListFont);
 #ifdef _DEBUG
 				delete dbglog;
-#endif
+#endif /*_DEBUG*/
+#ifdef _MAP
+				if (EditorMap)
+					DestroyWindow(EditorMap->m_hwnd);
+#endif /*_MAP*/
+
 				EndDialog(hDialog, 0);
 			}
 			break;

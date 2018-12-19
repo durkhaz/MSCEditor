@@ -42,10 +42,10 @@
 //  32-bit.
 //
 
-#ifndef SetWindowLongPtr
+#ifndef SetWindowLongPtrPtr
 #define LONG_PTR LONG
-#define SetWindowLongPtr( HWND, INDEX, DATA ) SetWindowLong( HWND, INDEX, DATA )
-#define GetWindowLongPtr( HWND, INDEX ) GetWindowLong( HWND, INDEX )
+#define SetWindowLongPtrPtr( HWND, INDEX, DATA ) SetWindowLongPtr( HWND, INDEX, DATA )
+//#define GetWindowLongPtr( HWND, INDEX ) GetWindowLong( HWND, INDEX )
 #endif
 
 //
@@ -370,7 +370,7 @@ ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lPara
 			if (ExtraData == NULL) {
 				return -1;
 			}
-			ZeroMemory( ExtraData, sizeof(*ExtraData ));
+			SecureZeroMemory( ExtraData, sizeof(*ExtraData ));
 
 			//
 			//  A dialog metadata control takes two WORDs as arguments
@@ -415,7 +415,7 @@ ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lPara
 				ExtraData->MaximumHeightPercent = 100;
 			}
 
-			SetWindowLongPtr( hWnd, 0, (LONG_PTR)ExtraData );
+			SetWindowLongPtrPtr( hWnd, 0, (LONG_PTR)ExtraData );
 			break;
 		}
 
@@ -428,7 +428,7 @@ ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lPara
 
 			ExtraData = (PRESIZE_DIALOG_DATA_WINDOW_EXTRA)GetWindowLongPtr( hWnd, 0 );
 			if (ExtraData != NULL) {
-				SetWindowLongPtr( hWnd, 0, 0 );
+				SetWindowLongPtrPtr( hWnd, 0, 0 );
 				free( ExtraData );
 			}
 			break;
@@ -529,7 +529,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 			if (ExtraData == NULL) {
 				return -1;
 			}
-			ZeroMemory( ExtraData, sizeof(*ExtraData ));
+			SecureZeroMemory( ExtraData, sizeof(*ExtraData ));
 
 			//
 			//  A dialog resize helper takes four WORDs as arguments
@@ -562,7 +562,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 				ExtraData->AdjustmentToBuddyRect.Bottom = 0;
 			}
 
-			SetWindowLongPtr( hWnd, 0, (LONG_PTR)ExtraData );
+			SetWindowLongPtrPtr( hWnd, 0, (LONG_PTR)ExtraData );
 			break;
 		}
 
@@ -575,7 +575,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 
 			ExtraData = (PRESIZE_DIALOG_CONTROL_WINDOW_EXTRA)GetWindowLongPtr( hWnd, 0 );
 			if (ExtraData != NULL) {
-				SetWindowLongPtr( hWnd, 0, 0 );
+				SetWindowLongPtrPtr( hWnd, 0, 0 );
 				free( ExtraData );
 			}
 			break;
@@ -732,7 +732,7 @@ ResizeDialogInitialize( HINSTANCE hInst )
 	//  be manipulated when resizes occur.
 	//
 
-	ZeroMemory( &ResizeDialogClassW, sizeof( ResizeDialogClassW ));
+	SecureZeroMemory( &ResizeDialogClassW, sizeof( ResizeDialogClassW ));
 
 	ResizeDialogClassW.style = 0;
 	ResizeDialogClassW.lpfnWndProc = ResizeDialogControlWindowProc;
@@ -747,7 +747,7 @@ ResizeDialogInitialize( HINSTANCE hInst )
 
 	RegisterClassW( &ResizeDialogClassW );
 
-	ZeroMemory( &ResizeDialogClassA, sizeof( ResizeDialogClassA ));
+	SecureZeroMemory( &ResizeDialogClassA, sizeof( ResizeDialogClassA ));
 
 	ResizeDialogClassA.style = 0;
 	ResizeDialogClassA.lpfnWndProc = ResizeDialogControlWindowProc;
@@ -762,7 +762,7 @@ ResizeDialogInitialize( HINSTANCE hInst )
 
 	RegisterClassA( &ResizeDialogClassA );
 
-	ZeroMemory( &ResizeDialogClassW, sizeof( ResizeDialogClassW ));
+	SecureZeroMemory( &ResizeDialogClassW, sizeof( ResizeDialogClassW ));
 
 	ResizeDialogClassW.style = 0;
 	ResizeDialogClassW.lpfnWndProc = ResizeDialogDataWindowProc;
@@ -777,7 +777,7 @@ ResizeDialogInitialize( HINSTANCE hInst )
 
 	RegisterClassW( &ResizeDialogClassW );
 
-	ZeroMemory( &ResizeDialogClassA, sizeof( ResizeDialogClassA ));
+	SecureZeroMemory( &ResizeDialogClassA, sizeof( ResizeDialogClassA ));
 
 	ResizeDialogClassA.style = 0;
 	ResizeDialogClassA.lpfnWndProc = ResizeDialogDataWindowProc;

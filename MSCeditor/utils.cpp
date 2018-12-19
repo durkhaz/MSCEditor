@@ -1,5 +1,7 @@
 #include "utils.h"
-#include <shobjidl.h> //COM
+#include <shlobj.h> //file dialog and getknownfolderpath
+#include "aclapi.h" //ACLs SetEntriesInAcl, EXPLICIT_ACCESS
+//#include <accctrl.h> //EXPLICIT_ACCESS
 #include <algorithm> //sort
 #include <fstream> //file stream input output
 #include <iostream>
@@ -8,45 +10,145 @@
 #include <Urlmon.h>
 #include <locale>
 #include <codecvt>
+#ifdef _MAP
+#include "map.h"
+#endif /*_MAP*/
 #undef max
 #undef min
 
-void GetPathToTemp(std::wstring &path)
+void AppendPath(std::wstring& path, const wchar_t more[])
 {
-	DWORD dwBufferSize = MAX_PATH;
-	BOOL bSucc = TRUE;
-	path.resize(dwBufferSize);
-	DWORD dwRetVal = GetTempPath(MAX_PATH, &path[0]);
+	std::wstring AppendStr = more;
+	while (path.size() > 0)
+		if (path.back() == '\\')
+			path.pop_back();
+		else
+			break;
 
-	bSucc = dwRetVal <= dwBufferSize && (dwRetVal);
-	if (bSucc)
-	{
-		path.resize(dwRetVal);
-		path += L"\\MSCeditor";
-		bSucc = CreateDirectory(path.c_str(), NULL);
-		if (!bSucc)
-			bSucc = GetLastError() == ERROR_ALREADY_EXISTS;
-	}
+	UINT offset = 0;
+	for (; offset < AppendStr.size(); offset++)
+		if (AppendStr[offset] != '\\')
+			break;
+	path += L"\\" + AppendStr.substr(offset);
+}
+
+bool IsFolderWritable(const std::wstring& path)
+{
+	std::wstring filepath = path;
+	filepath.resize(MAX_PATH);
+	bool bSucc = GetTempFileName(filepath.c_str(), L"TMP", 0, &filepath[0]);
+	TruncTailingNulls(&filepath);
 	if (!bSucc)
+		AppendPath(filepath, L"a");
+
+	std::ofstream owc(filepath.c_str(), std::ofstream::binary);
+	bool hr = owc.is_open();
+	owc.close();
+	DeleteFile(filepath.c_str());
+	return hr;
+}
+
+HRESULT FindAndCreateAppFolder()
+{
+	std::wstring DocumentFolder;
+	std::wstring AppFolder;
+
+	// Get path to documents folder
+	LPWSTR wszPath = NULL;
+	if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, NULL, &wszPath)))
+		return E_FAIL;
+
+	DocumentFolder = wszPath;
+	AppendPath(DocumentFolder, L"MySummerCar");
+	AppFolder = DocumentFolder;
+	AppendPath(AppFolder, L"MSCEditor");
+	CoTaskMemFree(wszPath);
+
+	// Does the directory exist
+	DWORD dwAttr = GetFileAttributes(AppFolder.c_str());
+	bool bFolderExists = dwAttr != 0xffffffff && (dwAttr & FILE_ATTRIBUTE_DIRECTORY);
+
+	// If it exist, check if it's writable. Try to delete it if it's not
+	if (bFolderExists)
 	{
-		path.clear();
-		path = L".";
+		if (IsFolderWritable(AppFolder))
+		{
+			appfolderpath = AppFolder;
+			return S_OK;
+		}
+		else if (!RemoveDirectory(AppFolder.c_str()))
+			return E_FAIL;
 	}
+
+	// If it doesn't exist or isn't writable we recreate folder
+	// Create a well-known SID for the Everyone group
+	PSID pEveryoneSID = NULL;
+	SID_IDENTIFIER_AUTHORITY SIDAuthWorld = SECURITY_WORLD_SID_AUTHORITY;
+	if (!AllocateAndInitializeSid(&SIDAuthWorld, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &pEveryoneSID))
+		return E_FAIL;
+
+	// Initialize an EXPLICIT_ACCESS structure for the access control entry
+	// The ACE will allow all users access to files & folders
+	EXPLICIT_ACCESS ea;
+	SecureZeroMemory(&ea, sizeof(EXPLICIT_ACCESS));
+	ea.grfAccessPermissions = 0xFFFFFFFF;
+	ea.grfAccessMode = SET_ACCESS;
+
+	// Both folders & files will inherit this ACE
+	ea.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+	ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+	ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+	ea.Trustee.ptstrName = (LPTSTR)pEveryoneSID;
+
+	// Create ACL that contains the new ACE
+	PACL pACL = NULL;
+	if (SetEntriesInAcl(1, &ea, NULL, &pACL) != ERROR_SUCCESS)
+		return E_FAIL;
+
+	// Allocate and initialize security descriptor
+	PSECURITY_DESCRIPTOR pSD = (PSECURITY_DESCRIPTOR)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, SECURITY_DESCRIPTOR_MIN_LENGTH);
+	if (pSD == NULL)
+		return E_FAIL;
+	
+	if (!InitializeSecurityDescriptor(pSD, SECURITY_DESCRIPTOR_REVISION))
+		return E_FAIL;
+
+	// Add ACL to security descriptor
+	if (!SetSecurityDescriptorDacl(pSD, TRUE, pACL, FALSE))
+		return E_FAIL;
+
+	// Initialize security attributes structure
+	SECURITY_ATTRIBUTES sa;
+	SecureZeroMemory(&sa, sizeof(SECURITY_ATTRIBUTES));
+	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa.lpSecurityDescriptor = pSD;
+	sa.bInheritHandle = FALSE;
+
+	if (!CreateDirectory(DocumentFolder.c_str(), &sa) && GetLastError() != ERROR_ALREADY_EXISTS)
+		return E_FAIL;
+
+	if (!CreateDirectory(AppFolder.c_str(), &sa) && GetLastError() != ERROR_ALREADY_EXISTS)
+		return E_FAIL;
+
+	if (!IsFolderWritable(AppFolder))
+		return E_FAIL;
+
+	appfolderpath = AppFolder;
+	return S_OK;
 }
 
 BOOL DownloadUpdatefile(const std::wstring url, std::wstring &path)
 {
-	GetPathToTemp(path);
-	path += L"\\update.tmp";
+	path = appfolderpath;
+	AppendPath(path, L"update.tmp");
 	return URLDownloadToFile(NULL, (LPCWSTR)url.c_str(), (LPCWSTR)path.c_str(), 0, NULL);
 }
 
 void FlipString(std::string &str, std::wstring file = L"")
 {
 	for (uint32_t i = 0; i < str.size(); i++)
-	{
 		str[i] = ~str[i];
-	}
+
 	if (!file.empty())
 	{
 		std::ofstream outf(file, std::ofstream::binary);
@@ -73,8 +175,8 @@ BOOL ParseUpdateData(const std::string &str, std::vector<std::string> &strs)
 	return i == str.size();
 }
 
-// true = newer than local version, false = identical
-bool CompareVersion(const std::string &localV, const std::string &remoteV)
+// true = newer than local version, false = identical or older
+BOOL IsRemoteVersionNewer(const std::string &localV, const std::string &remoteV)
 {
 	uint32_t iMax = std::max(localV.size(), remoteV.size());
 	std::string sl (iMax, '0');
@@ -88,8 +190,8 @@ bool CompareVersion(const std::string &localV, const std::string &remoteV)
 		{
 			int ln = atoi(&sl[i]);
 			int rn = atoi(&sr[i]);
-			if (rn > ln)
-				return TRUE;
+			if (ln != rn)
+				return (rn > ln);
 		}
 	}
 	return FALSE;
@@ -120,20 +222,13 @@ BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &change
 		for (uint32_t i = 0; (i + 1) < strs.size(); i++)
 		{
 			if ((strs[i]) == "changelog")
-			{
 				changelog = StringToWString(strs[i + 1]);
-			}
 			if ((strs[i]) == "path1")
-			{
 				apppath = StringToWString(strs[i + 1]);
-			}
 			if ((strs[i]) == "version")
-			{
-				up2date = !CompareVersion(WStringToString(Version), strs[i + 1]);
-			}
+				up2date = !IsRemoteVersionNewer(WStringToString(Version), strs[i + 1]);
 		}
 	}
-
 	SetFileAttributes(file.c_str(), FILE_ATTRIBUTE_NORMAL);
 	DeleteFile(file.c_str());
 
@@ -280,7 +375,7 @@ BOOL CompareStrsWithWildcard(const std::wstring &StrWithNumber, const std::wstri
 			for (offset = i; offset < StrWithNumber.size(); offset++)
 				if (!std::iswdigit(StrWithNumber[offset]))
 					break;
-			offset += -(int)i;
+			offset += -static_cast<int>(i);
 		}
 		wchar_t bla2 = StrWithWildcard[i + (offset > 0 ? 1 : 0)];
 		wchar_t bla1 = StrWithNumber[i + offset];
@@ -531,7 +626,6 @@ void UnloadFile()
 		hTempFile = INVALID_HANDLE_VALUE;
 	}
 		
-	tmpfilepath.clear();
 	bFiledateinit = FALSE;
 
 	SetWindowText(hDialog, (LPCWSTR)Title.c_str());
@@ -580,6 +674,11 @@ void UnloadFile()
 
 	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT4), hDialog);
 	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT4), WM_SETTEXT, 0, (LPARAM)0);
+
+#ifdef _MAP
+	if (EditorMap)
+		EditorMap->ClearAllMapObjects();
+#endif
 }
 
 bool CanClose()
@@ -654,7 +753,7 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 {
 	if (identifier == L"Locations")
 	{
-		if (params.size() == 2)
+		if (params.size() >= 2)
 		{
 			std::string bin(1, char(4));
 			std::wstring coords = params[1];
@@ -662,7 +761,9 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 			VectorStrToBin(coords, 3, bin);
 			VectorStrToBin(std::wstring(_T("0,0,0,1")), 4, bin);
 			VectorStrToBin(std::wstring(_T("1,1,1")), 3, bin);
-			locations.push_back(std::pair<std::wstring, std::string>(params[0], bin));
+			locations.push_back( 
+				std::pair<std::pair<std::wstring, bool>, std::string> 
+					(std::pair<std::wstring, bool>(params[0], params.size() == 3 ? static_cast<bool>(params[2][0]) : FALSE), bin));
 		}
 	}
 	else if (identifier == L"Items")
@@ -726,20 +827,25 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 	{
 		if (params.size() >= 2)
 		{
+			bool bSetting = ::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1;
 			if (params[0] == settings[0])
-				bMakeBackup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bMakeBackup = bSetting;
 			else if (params[0] == settings[1])
-				bBackupChangeNotified = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bBackupChangeNotified = bSetting;
 			else if (params[0] == settings[2])
-				bCheckForUpdate = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bCheckForUpdate = bSetting;
 			else if (params[0] == settings[3])
-				bFirstStartup = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bFirstStartup = bSetting;
 			else if (params[0] == settings[4])
-				bAllowScale = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bAllowScale = bSetting;
 			else if (params[0] == settings[5])
-				bEulerAngles = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bEulerAngles = bSetting;
 			else if (params[0] == settings[6])
-				bDisplayRawNames = (::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1);
+				bDisplayRawNames = bSetting;
+			else if (params[0] == settings[7])
+				bCheckIssues = bSetting;
+			else if (params[0] == settings[8])
+				bStartWithMap = bSetting;
 		}
 	}
 }
@@ -807,6 +913,8 @@ BOOL LoadDataFile(const std::wstring &datafilename)
 		}
 		getline(inf, strInput);
 	}
+	// Sort lists
+	std::sort(locations.begin(), locations.end(), [](const std::pair<std::pair<std::wstring, bool>, std::string> &a, const std::pair<std::pair<std::wstring, bool>, std::string> &b) -> bool { return a.first.first < b.first.first; });
 	return 0;
 }
 
@@ -828,14 +936,6 @@ void StrGetLine(const std::wstring &target, std::wstring &str, uint32_t &offset,
 	i = i - offset;
 	str = target.substr(offset, i);
 	offset += (i + j);
-}
-
-template <typename TSTRING>
-void TruncTailingNulls(const TSTRING &str)
-{
-	uint32_t i = str->size() - 1;
-	for (i; str->at(i) == '\0'; i--);
-	str->resize(i + 1);
 }
 
 //very ugly but idc
@@ -911,6 +1011,10 @@ bool SaveSettings(const std::wstring &savefilename)
 	setting += L'\"' + settings[4] + L"\" \"" + std::to_wstring(bAllowScale == 1) + L"\"\n";
 	setting += L'\"' + settings[5] + L"\" \"" + std::to_wstring(bEulerAngles == 1) + L"\"\n";
 	setting += L'\"' + settings[6] + L"\" \"" + std::to_wstring(bDisplayRawNames == 1) + L"\"\n";
+	setting += L'\"' + settings[7] + L"\" \"" + std::to_wstring(bCheckIssues == 1) + L"\"\n";
+#ifdef _MAP
+	setting += L'\"' + settings[8] + L"\" \"" + std::to_wstring(EditorMap != nullptr) + L"\"\n";
+#endif
 	buffer.insert(start, setting);
 
 	//write to disk
@@ -1043,6 +1147,24 @@ int SaveFile()
 	return 0;
 }
 
+bool IsItemFile()
+{
+	bool bIsItemFile = FALSE;
+	if (!variables.empty())
+	{
+		for (uint32_t i = 0; i < itemTypes.size(); i++)
+			if (EntryExists(itemTypes[i].GetID()) >= 0)
+			{
+				bIsItemFile = TRUE;
+				break;
+			}
+	}
+	else
+		bIsItemFile = (filename.find(L"items") != std::string::npos);
+
+	return bIsItemFile;
+}
+
 void InitMainDialog(HWND hwnd)
 {
 	UnloadFile();
@@ -1072,45 +1194,30 @@ void InitMainDialog(HWND hwnd)
 	if (filename.substr(filename.size() - 4) == L".bak")
 		MessageBox(hDialog, GLOB_STRS[44].c_str(), L"Info", MB_OK | MB_ICONQUESTION);
 
-	std::wstring newpath;
-	GetPathToTemp(newpath);
-
-	newpath.resize(MAX_PATH);
-	DWORD dwUID = GetTempFileName(newpath.c_str(), L"TMP", 0, &newpath[0]);
-
-	size_t firstNull = newpath.find_first_of(L'\0');
-	if (firstNull != std::wstring::npos)
-		newpath.resize(firstNull);
-
-	if (!dwUID)
-		newpath += L"\\file.tmp";
-
-	tmpfilepath = newpath;
-
-	// If GetTempFileName failed, we might have to remove "file.tmp"
-	if (!DeleteFile(tmpfilepath.c_str()))
+	// Temp file, which is just a copy of the currently opened file. Not even used anymore but we'll keep it I guess
 	{
-		if (GetLastError() == ERROR_ACCESS_DENIED)
+		std::wstring tmppath = appfolderpath;
+		tmppath.resize(MAX_PATH);
+		DWORD dwUID = GetTempFileName(tmppath.c_str(), L"TMP", 0, &tmppath[0]);
+		TruncTailingNulls(&tmppath);
+		if (!dwUID)
+			AppendPath(tmppath, L"\\file.tmp");
+
+		// If GetTempFileName failed, we might have to remove "file.tmp"
+		if (!DeleteFile(tmppath.c_str()))
 		{
-			// File is read only
-			SetFileAttributes(tmpfilepath.c_str(), FILE_ATTRIBUTE_NORMAL);
-			DeleteFile(tmpfilepath.c_str());
+			if (GetLastError() == ERROR_ACCESS_DENIED)
+			{
+				// File might be read only
+				SetFileAttributes(tmppath.c_str(), FILE_ATTRIBUTE_NORMAL);
+				DeleteFile(tmppath.c_str());
+			}
 		}
-	}
 
-	// Copy file
-	if (!CopyFileEx(filepath.c_str(), tmpfilepath.c_str(), NULL, NULL, FALSE, 0))
-	{
-		TCHAR buffer[128];
-		memset(buffer, 0, 128);
-		swprintf(buffer, 128, GLOB_STRS[37].c_str(), tmpfilepath.c_str());
-		MessageBox(hDialog, buffer, ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
-		EndDialog(hDialog, 0);
-		return;
+		// Copy file, open it and store handle
+		if (CopyFileEx(filepath.c_str(), tmppath.c_str(), NULL, NULL, FALSE, 0))
+			hTempFile = CreateFile(tmppath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
 	}
-
-	// Keep file open and store handle
-	hTempFile = CreateFile(tmpfilepath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
 
 	// Hide username from title
 	{
@@ -1168,9 +1275,9 @@ void InitMainDialog(HWND hwnd)
 		EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 4), MF_ENABLED);
 		menu = GetSubMenu(GetMenu(hDialog), 1);
-		if (locations.size() > 0)
+		if (!locations.empty())
 			EnableMenuItem(menu, GetMenuItemID(menu, 0), MF_ENABLED);
-		if (partIdentifiers.size() > 0)
+		if (!partIdentifiers.empty())
 			EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED);
 		if (EntryExists(L"keycheck") >= 0)
 			EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
@@ -1178,16 +1285,13 @@ void InitMainDialog(HWND hwnd)
 			EnableMenuItem(menu, GetMenuItemID(menu, 3), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 6), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 7), MF_ENABLED);
-		for (uint32_t i = 0; i < itemTypes.size(); i++)
+
+		if (IsItemFile())
 		{
-			if (EntryExists(itemTypes[i].GetID()) >= 0)
-			{
-				MENUITEMINFO info = { sizeof(MENUITEMINFO) };
-				info.fMask = MIIM_STATE;
-				info.fState = MFS_ENABLED;
-				SetMenuItemInfo(menu, 4, TRUE, &info);
-				break;
-			}
+			MENUITEMINFO info = { sizeof(MENUITEMINFO) };
+			info.fMask = MIIM_STATE;
+			info.fState = MFS_ENABLED;
+			SetMenuItemInfo(menu, 4, TRUE, &info);
 		}
 	}
 	// Set current changes to 0
@@ -1208,9 +1312,26 @@ void InitMainDialog(HWND hwnd)
 			swprintf(&buffer[0], 128, GLOB_STRS[50].c_str(), issues.size(), (issues.size() == 1 ? GLOB_STRS[52] : GLOB_STRS[51]).c_str());
 			SendMessage(hIssues, WM_SETTEXT, 0, (LPARAM)&buffer[0]);
 		}
-	}
-}
 
+	}
+#ifdef _MAP
+	if (!EditorMap)
+	{
+		if (bStartWithMap)
+			EditorMap = new MapDialog();
+	}
+	else
+		EditorMap->UpdateAllMapObjects();
+#endif /*_MAP*/
+}
+#ifdef _MAP
+void ShowObjectOnMap(class Variable* var)
+{
+	if (!EditorMap)
+		EditorMap = new MapDialog();
+	EditorMap->ShowObjectOnMap(var);
+}
+#endif /*_MAP*/
 int GetScrollbarPos(HWND hwnd, int bar, uint32_t code)
 {
 	SCROLLINFO si = {};
@@ -1234,11 +1355,11 @@ int GetScrollbarPos(HWND hwnd, int bar, uint32_t code)
 		break;
 
 	case SB_PAGEUP /*SB_PAGELEFT*/:
-		result = std::max(si.nPos - (int)si.nPage, minPos);
+		result = std::max(si.nPos - static_cast<int>(si.nPage), minPos);
 		break;
 
 	case SB_PAGEDOWN /*SB_PAGERIGHT*/:
-		result = std::min(si.nPos + (int)si.nPage, maxPos);
+		result = std::min(si.nPos + static_cast<int>(si.nPage), maxPos);
 		break;
 
 	case SB_THUMBPOSITION:
@@ -1274,7 +1395,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 			if (carpart.iBolted != UINT_MAX && variables[carpart.iBolted].value[0])
 				issues.push_back(Issue(carpart.iBolted, std::string(1, '\0')));
 
-			if (carpart.iTightness != UINT_MAX && *((int*)(variables[carpart.iTightness].value.data())) != 0)
+			if (carpart.iTightness != UINT_MAX && *reinterpret_cast<const int*>(variables[carpart.iTightness].value.data()) != 0)
 				issues.push_back(Issue(carpart.iTightness, IntToBin(0)));
 
 			if (carpart.iBolts != UINT_MAX)
@@ -1297,7 +1418,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 	const int iTime = EntryExists(L"worldtime");
 	if (iTime >= 0)
 	{
-		int time = *((int*)(variables[iTime].value.data()));
+		int time = *reinterpret_cast<const int*>(variables[iTime].value.data());
 		if (time < 0 || time > 22)
 			issues.push_back(Issue(iTime, IntToBin(time <= 0 ? 0 : time >= 22 ? 22 : time)));
 		else if (time % 2 != 0)
@@ -1306,7 +1427,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 	const int iDay = EntryExists(L"worldday");
 	if (iDay >= 0)
 	{
-		int day = *((int*)(variables[iDay].value.data()));
+		int day = *reinterpret_cast<const int*>(variables[iDay].value.data());
 		if (day < 1 || day > 7)
 			issues.push_back(Issue(iDay, IntToBin(day <= 1 ? 1 : day >= 7 ? 7 : day)));
 	}
@@ -1317,9 +1438,7 @@ inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<uint32_t> &bol
 {
 	uint32_t boltstate = 0;
 	for (uint32_t k = 0; k < boltlist.size(); k++)
-	{
 		boltstate += boltlist[k];
-	}
 
 	if (tightness > boltstate)
 	{
@@ -1329,14 +1448,12 @@ inline bool PartIsStuck(std::wstring &stuckStr, const std::vector<uint32_t> &bol
 		stuckStr += buffer;
 		return TRUE;
 	}
-
-
 	return FALSE;
 }
 
 void PopulateCarparts()
 {
-	if (variables.empty())
+	if (variables.empty() || partIdentifiers.empty())
 		return;
 
 	carparts.clear();
@@ -1709,6 +1826,10 @@ void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::stri
 	}
 
 	UpdateChangeCounter();
+#ifdef _MAP
+	if (EditorMap && variables[vIndex].header.GetNonContainerValueType() == EntryValue::Transform)
+		EditorMap->UpdateMapObject(&variables[vIndex]);
+#endif
 }
 
 void UpdateList(const std::wstring &str)
@@ -2307,7 +2428,7 @@ QTRN EulerToQuat(const ANGLES *angles)
 
 float BinToFloat(const std::string &str)
 {
-	return str.size() != 4 ? NAN : *((float*)(str.data()));
+	return str.size() != 4 ? NAN : *reinterpret_cast<const float*>(str.data());
 }
 
 std::wstring BinToFloatStr(const std::string &str)
@@ -2332,7 +2453,7 @@ std::wstring BinToFloatVector(const std::string &value, int max, int start)
 	std::wstring VectorStr;
 	max += start;
 
-	if ((max * 4) > (int)value.size())
+	if ((max * 4) > static_cast<int>(value.size()))
 		return L"";
 
 	for (int i = start; i < max; i++)
@@ -2370,14 +2491,14 @@ std::string FloatStrToBin(const std::wstring &str)
 		if (pos != std::wstring::npos)
 			f = pos == 0 ? std::numeric_limits<float>::infinity() : -std::numeric_limits<float>::quiet_NaN();
 	}
-	out.assign((char *)&f, 4);
+	out.assign(reinterpret_cast<char*>(&f), 4);
 	return out;
 }
 
 std::string FloatToBin(const float f)
 {
 	std::string out;
-	out.assign((char *)&f, 4);
+	out.assign(reinterpret_cast<const char*>(&f), 4);
 	return out;
 }
 
@@ -2385,14 +2506,14 @@ std::string IntStrToBin(const std::wstring &str)
 {
 	std::string out;
 	int x = static_cast<int>(::wcstol(str.c_str(), NULL, 10));
-	out.assign((char *)&x, 4);
+	out.assign(reinterpret_cast<char*>(&x), 4);
 	return out;
 }
 
 std::string IntToBin(int x)
 {
 	std::string out;
-	out.assign((char *)&x, 4);
+	out.assign(reinterpret_cast<char*>(&x), 4);
 	return out;
 }
 
@@ -2510,6 +2631,19 @@ std::wstring* SanitizeTagStr(std::wstring &str)
 	return &str.assign(out);
 }
 
+std::wstring GetItemPrefix(const std::wstring& VariableKey)
+{
+	for (auto& item : itemTypes)
+	{
+		std::wstring name = *SanitizeTagStr(item.GetName());
+		if (VariableKey.substr(0, name.size()) == name)
+			for (uint32_t i = name.size(); i < VariableKey.size(); i++)
+				if (!isdigit(VariableKey[i]))
+					return VariableKey.substr(0, i);
+	}
+	return std::wstring();
+}
+
 typedef std::pair<int, int64_t> ErrorCode;
 ErrorCode ParseSavegame()
 {
@@ -2558,7 +2692,7 @@ ErrorCode ParseSavegame()
 		position = iwc.tellg();
 		string ValueSizeStr = string(4, '\0');
 		iwc.read(&ValueSizeStr[0], 4);
-		uint32_t ValueSize = *((uint32_t*)&ValueSizeStr[0]);
+		uint32_t ValueSize = *reinterpret_cast<uint32_t*>(&ValueSizeStr[0]);
 		if (!iwc || ValueSize < 6)
 			return ErrorCode(32, position + iwc.gcount());
 
@@ -2587,30 +2721,25 @@ ErrorCode ParseSavegame()
 	iwc.close();
 	std::sort(variables.begin(), variables.end(), [](const Variable &a, const Variable &b) -> bool { return a.key < b.key; } );
 
-	wstring previous_extract;
-	uint32_t group = 0;
-
+	wstring previous_extract(1, '\0');
+	uint32_t group = UINT_MAX;
+	bool bIsItemFile = IsItemFile();
 	for (uint32_t i = 0; i < variables.size(); i++)
 	{
-		if (!previous_extract.empty())
+		if (variables[i].key.substr(0, previous_extract.length()) != previous_extract)
 		{
-			if (variables[i].key.substr(0, previous_extract.length()) != previous_extract)
-			{
-				group++;
+			group++;
+			previous_extract = bIsItemFile ? GetItemPrefix(variables[i].key) : variables[i].key;
+			if (bIsItemFile && previous_extract.empty())
 				previous_extract = variables[i].key;
-				entries.push_back(variables[i].key);
-			}
-		}
-		else
-		{
-			previous_extract = variables[i].key;
-			entries.push_back(variables[i].key);
+			entries.push_back(previous_extract);
 		}
 		variables[i].group = group;
 	}
+	
 #ifdef _DEBUG
 	QueryPerformanceCounter(&end);
-	LOG(L"Parsing save-file took " + std::to_wstring((end.QuadPart - start.QuadPart) / (double)frequency.QuadPart) + L" seconds.\n");
+	LOG(L"Parsing save-file took " + std::to_wstring((end.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart)) + L" seconds.\n");
 	LOG(L"Entries: " + std::to_wstring(variables.size()) + L", Groups: " + std::to_wstring(group + 1) + L"\n");
 	std::vector<int> numdts(EntryValue::Num, 0);
 	std::vector<std::pair<std::wstring, int>> numcts;

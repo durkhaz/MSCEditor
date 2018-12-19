@@ -122,12 +122,12 @@ Header::Header(const std::string &valuestr, uint32_t &HeaderSize)
 	}
 	if (GetContainerType() == EntryContainer::Dictionary)
 	{
-		keytype = *((uint32_t*)&valuestr[offset]);
+		keytype = *reinterpret_cast<const uint32_t*>(&valuestr[offset]);
 		offset += 4;
 	}
 	if (offset + 4 < valuestr.size())
 	{
-		valuetype = *((uint32_t*)&valuestr[offset]);
+		valuetype = *reinterpret_cast<const uint32_t*>(&valuestr[offset]);
 		offset += 4;
 		if (IsContainer())
 		{
@@ -193,7 +193,7 @@ void Variable::SetRemoved(bool b)
 std::wstring Variable::GetDisplayString() const
 {
 	if (header.IsContainer())
-		return header.GetContainerDisplayString(*((int*)(value.substr(0, 4).data())));
+		return header.GetContainerDisplayString(*reinterpret_cast<const int*>(value.substr(0, 4).data()));
 	else
 		return ValueBinToStr(value, header.GetValueType());
 }
@@ -222,7 +222,7 @@ std::wstring Variable::ValueBinToStr(const std::string &value, const uint32_t &t
 	case EntryValue::String:
 		return BinStrToWStr(value);
 	case EntryValue::Integer:
-		return std::to_wstring(*((int*)(value.data())));
+		return std::to_wstring(*reinterpret_cast<const int*>(value.data()));
 	default:
 		return L"<Unsupported Datatype>";
 	}

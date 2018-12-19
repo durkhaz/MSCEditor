@@ -1,4 +1,5 @@
 #include "externs.h"
+#include "version.h"
 #ifdef _DEBUG
 DebugOutput *dbglog;
 #endif
@@ -8,26 +9,29 @@ int iItem;
 
 HWND hDialog, hEdit, hCEdit, hReport;
 HINSTANCE hInst;
-std::vector<std::wstring> entries;
-std::vector<Variable> variables;
-std::vector<std::pair<uint32_t, uint32_t>> indextable;
-std::vector<std::pair<std::wstring, std::string>> locations;	// Holds all predefined locations, used by the teleport dialog
-std::vector<CarPart> carparts;									// This vector is filled when bolt report is opened. Contains all the carparts found
-std::vector<Item> itemTypes;									// Types of items in the game, e.g. sausage, beer etc
-std::vector<ItemAttribute> itemAttributes;						// Attributes items can have, e.g. transform, consumed etc
-std::vector<SpecialCase> partSCs;								// Bolt report special cases
-std::vector<std::wstring> partIdentifiers;						// Properties of car parts. Used by the bolt report to detect parts properly
-std::vector<CarProperty> carproperties;							// Car properties with min and max values such as wear, fuel and other liquids
-std::vector<TimetableEntry> timetableEntries;					// Entry for the timetable inside the time and weather dialog
-std::wstring filepath;											// Full file path of currently opened file
-std::wstring filename;											// Filename of currently opened file
-std::wstring tmpfilepath;										// Path to the temp file
-HANDLE hTempFile = INVALID_HANDLE_VALUE;						// Handle of the tempfile. Invalidated upon exiting
+std::vector<std::wstring> entries;												// The "groups" of variables displayed on the left list
+std::vector<Variable> variables;												// All variables read in from file, e.g. carjacktransform
+std::vector<std::pair<uint32_t, uint32_t>> indextable;							// Holds indices of the currently selected group
+std::vector<std::pair<std::pair<std::wstring, bool>, std::string>> locations;	// Holds all predefined locations, used by the teleport dialog and map. <<Name, IsMapRelevant>, Bin>
+std::vector<CarPart> carparts;													// This vector is filled when bolt report is opened. Contains all the carparts found
+std::vector<Item> itemTypes;													// Types of items in the game, e.g. sausage, beer etc
+std::vector<ItemAttribute> itemAttributes;										// Attributes items can have, e.g. transform, consumed etc
+std::vector<SpecialCase> partSCs;												// Bolt report special cases
+std::vector<std::wstring> partIdentifiers;										// Properties of car parts. Used by the bolt report to detect parts properly
+std::vector<CarProperty> carproperties;											// Car properties with min and max values such as wear, fuel and other liquids
+std::vector<TimetableEntry> timetableEntries;									// Entry for the timetable inside the time and weather dialog
+std::wstring filepath;															// Full file path of currently opened file
+std::wstring filename;															// Filename of currently opened file
+std::wstring appfolderpath;														// Path to the writable apps folder
+HANDLE hTempFile = INVALID_HANDLE_VALUE;										// Handle of the tempfile. Invalidated upon exiting
 SYSTEMTIME filedate;
 HFONT hListFont;
+#ifdef _MAP
+class MapDialog* EditorMap = NULL;
+#endif /*_MAP*/
 
-bool bFiledateinit = FALSE, bMakeBackup = TRUE, bEulerAngles = FALSE, bCheckForUpdate = TRUE, bBackupChangeNotified = FALSE, bFirstStartup = TRUE, bAllowScale = FALSE, bDisplayRawNames = FALSE;
-const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup", L"allow_scale", L"use_euler", L"raw_names" };
+bool bFiledateinit = FALSE, bMakeBackup = TRUE, bEulerAngles = FALSE, bCheckForUpdate = TRUE, bBackupChangeNotified = FALSE, bFirstStartup = TRUE, bAllowScale = FALSE, bDisplayRawNames = FALSE, bCheckIssues = FALSE, bStartWithMap = FALSE;
+const std::wstring settings[] = { L"make_backup", L"backup_change_notified", L"check_updates", L"first_startup", L"allow_scale", L"use_euler", L"raw_names", L"check_issues", L"start_with_map"};
 
 PVOID pResizeState = NULL;
 
@@ -38,7 +42,7 @@ const float deg2Rad = pi / 180.f;
 
 const std::wstring posInfinity(1, wchar_t(0x221E));
 const std::wstring negInfinity = L"-" + posInfinity;
-const std::wstring Version = L"1.09";
+const std::wstring Version = std::to_wstring(VERSION_MAJOR) + L"." + std::to_wstring(VERSION_MINOR);
 const std::wstring bools[2] = { L"false", L"true" };
 const std::wstring Title = L"MSCEditor " + Version;
 const std::wstring IniFile = L"msce.ini";
@@ -83,7 +87,7 @@ const std::wstring GLOB_STRS[] =
 	_T("\nNo entries!"), //34
 	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality.\n\n\nPossible solutions:\n\n - Make sure the file is in the same folder as this program.\n - Extract the compressed archive before starting.\n - If file is missing, redownload the program."), //35
 	_T("Update available! Update now?\n(Will start download in browser)\n\nChangelog:\n"), //36
-	_T("Could not write temporary backup at path:\n\"%s\"\nPlease report this issue."), //37
+	_T("Could not write to app folder at path:\n\"%s\"\nPlease report this issue."), //37
 	_T("There are %d issues with your save that could lead to bugs in the game. Check them out now?\n (You can review the changes before saving)"), //38
 	_T("File could not be reloaded because it was renamed or deleted!"), //39
 	_T("Successfully wrote dumpfile!"), //40
@@ -99,6 +103,16 @@ const std::wstring GLOB_STRS[] =
 	_T("%d issue%s found!"), //50
 	_T("s were"), //51
 	_T(" was"), //52
+	_T("LMB: Drag to navigate map.\nWHEEL: Zoom map.\nRMB: Actions."), //53
+	_T("Select:"), //54
+	_T("Couldn't open map because app folder wasn't writable!"), //55
+	_T("Copy coordinates to clipboard"), //56
+	_T("Teleport an object here"), // 57
+	_T("Measure distance"), // 58
+	_T("Distance to here"), // 59
+	_T("Clear measurement"), // 60
+	_T("NOW LOADING YEAR 1995..."), // 61
+	_T("REQUIRES WINDOWS 8.1 OR NEWER") // 62
 };
 
 const std::wstring BListSymbols[] =

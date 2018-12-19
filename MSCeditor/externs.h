@@ -8,6 +8,7 @@
 #include "structs.h"
 
 #ifdef _DEBUG
+#include <iostream>
 #include <fstream>		// File stream input output
 class DebugOutput
 {
@@ -23,6 +24,13 @@ public:
 	}
 	std::wofstream m_fileStream;
 
+	template <typename T> friend DebugOutput& operator<< (DebugOutput& stream, T val)
+	{
+		stream.m_fileStream << val;
+		std::wcout << val;
+		return stream;
+	};
+
 	static std::wstring GetTime()
 	{
 		SYSTEMTIME time;
@@ -32,32 +40,33 @@ public:
 		buffer.resize(swprintf(&buffer[0], 128, L"[%02d:%02d:%02d] ", time.wHour, time.wMinute, time.wSecond));
 		return buffer;
 	}
+
 	void LogNoConsole(const std::wstring &str)
 	{
-		m_fileStream << str;
+		m_fileStream << GetTime() << str;
+		m_fileStream.flush();
 	}
-};
 
-
-
-template <typename T> DebugOutput& operator<< (DebugOutput& stream, T val)
-{
-	stream.m_fileStream << val;
-	std::wcout << val;
-	return stream;
+	void Log(const std::wstring &str)
+	{
+		*this << GetTime() << str;
+		m_fileStream.flush();
+	}
 };
 
 extern DebugOutput *dbglog;
 
-#define LOG(val) *dbglog << DebugOutput::GetTime() << val; dbglog->m_fileStream.flush()
+#define LOG(val) dbglog->Log(val)
 #else
 #define LOG(val) while(false)
 #endif
 
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
 
-#define HX_STARTENTRY	0x7E
-#define HX_ENDENTRY		0x7B
-#define LPARAM_OFFSET	100000
+#define HX_STARTENTRY	 0x7E
+#define HX_ENDENTRY		 0x7B
+#define LPARAM_OFFSET	 100000
 
 
 
@@ -68,7 +77,7 @@ extern HINSTANCE hInst;
 extern std::vector<std::wstring> entries;
 extern std::vector<Variable> variables;
 extern std::vector<std::pair<uint32_t, uint32_t>> indextable;
-extern std::vector<std::pair<std::wstring, std::string>> locations;
+extern std::vector<std::pair<std::pair<std::wstring, bool>, std::string>> locations;
 extern std::vector<Item> itemTypes;
 extern std::vector<ItemAttribute> itemAttributes;
 extern std::vector<CarPart> carparts;
@@ -78,12 +87,14 @@ extern std::vector<CarProperty> carproperties;
 extern std::vector<TimetableEntry> timetableEntries;
 extern std::wstring filepath;
 extern std::wstring filename;
-extern std::wstring tmpfilepath;
+extern std::wstring appfolderpath;
 extern HANDLE hTempFile;
 extern SYSTEMTIME filedate;
 extern HFONT hListFont;
-
-extern bool bFiledateinit, bMakeBackup, bEulerAngles, bCheckForUpdate, bBackupChangeNotified, bFirstStartup, bAllowScale, bDisplayRawNames;
+#ifdef _MAP
+extern class MapDialog* EditorMap;
+#endif /*_MAP*/
+extern bool bFiledateinit, bMakeBackup, bEulerAngles, bCheckForUpdate, bBackupChangeNotified, bFirstStartup, bAllowScale, bDisplayRawNames, bCheckIssues, bStartWithMap;
 
 extern PVOID pResizeState;
 

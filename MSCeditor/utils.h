@@ -7,9 +7,6 @@
 #include "resource.h"
 #include "externs.h"
 
-#define GET_X_LPARAM(lp)                        ((int)(short)LOWORD(lp))
-#define GET_Y_LPARAM(lp)                        ((int)(short)HIWORD(lp))
-
 //templates
 
 template <typename TSTRING>
@@ -60,6 +57,14 @@ std::wstring StringToWString(const TSTRING &s)
 }
 
 template <typename TSTRING>
+void TruncTailingNulls(const TSTRING &str)
+{
+	uint32_t i = str->size() - 1;
+	for (i; str->at(i) == '\0'; i--);
+	str->resize(i + 1);
+}
+
+template <typename TSTRING>
 TSTRING* TruncFloatStr(TSTRING &str)
 {
 	std::string out = WStringToString(str);
@@ -88,6 +93,8 @@ inline bool ContainsStr(const TSTRING1 &target, const TSTRING2 &str)
 
 // Forward declarations
 
+void AppendPath(std::wstring& path, const wchar_t more[]);
+HRESULT FindAndCreateAppFolder();
 BOOL DownloadUpdatefile(const std::wstring url, std::wstring &path);
 BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &changelog);
 std::wstring ReadRegistry(const HKEY root, const std::wstring key, const std::wstring name);
@@ -107,6 +114,9 @@ bool SaveSettings(const std::wstring &savefilename);
 void ClearStatic(HWND hStatic, HWND hDlg);
 void FreeLPARAMS(HWND hwnd);
 BOOL LoadDataFile(const std::wstring &datafilename);
+#ifdef _MAP
+void ShowObjectOnMap(class Variable* var);
+#endif
 
 int CompareStrs(const std::wstring &str1, const std::wstring &str2);
 BOOL CompareStrsWithWildcard(const std::wstring &StrWithNumber, const std::wstring &StrWithWildcard);
