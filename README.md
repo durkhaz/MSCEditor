@@ -1,29 +1,40 @@
 # MSCEditor
 
-	MSCeditor - a savegame editor				 	by durkhaz
+	MSCeditor - a save editor			by durkhaz
 	For the (great) game "My Summer Car"		by Amistech Games 
 
-Q: What does it do?
+**Q: What does it do?**
 
-A: It converts binary data to human readable form and back, allowing you to edit your savegames as you please!
-It currently supports the following datatypes: FLOAT, BOOL, ARRAY, INT, STRING, VECTOR3, VECTOR4.  
+It's a parser for the Unity Plugin "EasySave 2", allowing you to edit your saves as you please!
+Complete set of features:
+ - A World map rendered with Direct2D (Requires Windows 8.1 or newer)
+ - Add and remove entries
+ - Teleport objects
+ - Identify problems with your car
+ - Spawn items
+ - Modify time and weather
 
-Q: Where do I find my savegames?
+**Q: Where do I find my saves?**
 
-A: AppData\LocalLow\Amistech\My Summer Car\. The tool should open the correct folder on first launch though.
+AppData\LocalLow\Amistech\My Summer Car\. The tool should open the correct folder on first launch though.
 
-Q: There's 6 files, which one do I open?
+**Q: There's 6 files, which one do I open?**
 
-A: The entries of interest are inside "defaultES2File". But you could open the other ones too.
+ Most entries of interest are inside "defaultES2File". But you could open the other ones too.
 
-Q: I changed some values and now the game won't load my savegame Is this a bug?
+**Q: I changed some values and now the game won't load my savegame Is this a bug?**
 
-A: No, I tried my best to validate all the data, but there's only so much I can do. If you want to break the game, there's always a way.
+No, I tried my best to validate all the data, but there's only so much I can do. If you want to break the game, there's always a way.
 
-Q: Why do entries show up red?
+**Q: Why do entries show up red?**
 
-A: red = unsaved modified entries. Right click to reset them to their file state
+red = unsaved modified entries. Right click to reset them to their file state
 
-Q: How do backups work?
+**Q: How do backups work?**
 
-A: When the option is enabled, it saves backups to the same folder the savegames are in.  It will make a backup everytime you save, so no data can be lost!
+When the option is enabled, it saves backups to the same folder the savegames are in.  It will make a backup everytime you save, so no data can be lost!
+
+**Q: What data-types are currently supported?**
+
+Transform, Float, String, Boolean, Color, Integer, Vector3
+Containers: NativeArray, Dictionary, List, HashSet, Queue, Stack
