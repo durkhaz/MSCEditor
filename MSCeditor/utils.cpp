@@ -10,11 +10,14 @@
 #include <Urlmon.h>
 #include <locale>
 #include <codecvt>
+#include <wrl\client.h> // COM Smart pointer
 #ifdef _MAP
 #include "map.h"
 #endif /*_MAP*/
 #undef max
 #undef min
+
+using Microsoft::WRL::ComPtr;
 
 void AppendPath(std::wstring& path, const wchar_t more[])
 {
@@ -178,7 +181,7 @@ BOOL ParseUpdateData(const std::string &str, std::vector<std::string> &strs)
 // true = newer than local version, false = identical or older
 BOOL IsRemoteVersionNewer(const std::string &localV, const std::string &remoteV)
 {
-	uint32_t iMax = std::max(localV.size(), remoteV.size());
+	uint32_t iMax = static_cast<uint32_t>(std::max(localV.size(), remoteV.size()));
 	std::string sl (iMax, '0');
 	sl.replace(0, localV.size(), localV);
 	std::string sr (iMax, '0');
@@ -283,7 +286,7 @@ int CALLBACK AlphComp(LPARAM lp1, LPARAM lp2, LPARAM sortParam)
 	std::wstring s2(64, '\0');
 
 	HWND hwnd;
-	DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hReport, GWL_USERDATA);
+	DLGHDR *pHdr = (DLGHDR *)GetWindowLongPtr(hReport, GWLP_USERDATA);
 	if (pHdr != nullptr)
 		hwnd = pHdr->hwndDisplay;
 	else
@@ -321,7 +324,7 @@ void OnSortHeader(LPNMLISTVIEW pLVInfo)
 	UpdateBListParams(pLVInfo->hdr.hwndFrom);
 }
 
-BOOL GetLastWriteTime(LPTSTR pszFilePath, SYSTEMTIME &stUTC)
+INT_PTR GetLastWriteTime(LPTSTR pszFilePath, SYSTEMTIME &stUTC)
 {
 	FILETIME ftCreate, ftAccess, ftWrite;
 
@@ -354,13 +357,13 @@ void BreakLPARAM(const LPARAM &lparam, int &i, int &j)
 {
 	if (lparam >= (LPARAM_OFFSET))
 	{
-		i = lparam / LPARAM_OFFSET;
-		j = lparam - (i * LPARAM_OFFSET);
+		i = static_cast<int>(lparam / LPARAM_OFFSET);
+		j = static_cast<int>(lparam - (i * LPARAM_OFFSET));
 	}
 	else
 	{
 		i = 0;
-		j = lparam;
+		j = static_cast<int>(lparam);
 	}
 }
 
@@ -387,7 +390,7 @@ BOOL CompareStrsWithWildcard(const std::wstring &StrWithNumber, const std::wstri
 
 int CompareStrs(const std::wstring &str1, const std::wstring &str2)
 {
-	uint32_t max = str1.size();
+	auto max = str1.size();
 	if (str1.size() > str2.size())
 		max = str2.size();
 
@@ -437,7 +440,7 @@ void UpdateBListParams(HWND &hList)
 	LVITEM lvi;
 	lvi.mask = LVIF_PARAM;
 
-	uint32_t max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	auto max = static_cast<uint32_t>(SendMessage(hList, LVM_GETITEMCOUNT, 0, 0));
 
 	for (uint32_t i = 0; i < max; i++)
 	{
@@ -475,7 +478,7 @@ uint32_t GetGroupStartIndex(const uint32_t &group, const uint32_t &index = UINT_
 LVITEM GetGroupEntry(const uint32_t &group)
 {
 	HWND hList = GetDlgItem(hDialog, IDC_List);
-	uint32_t max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	auto max = static_cast<uint32_t>(SendMessage(hList, LVM_GETITEMCOUNT, 0, 0));
 	LVITEM lvi;
 	lvi.mask = LVIF_PARAM;
 	lvi.iSubItem = 0;
@@ -555,31 +558,25 @@ void OpenFileDialog()
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	if (SUCCEEDED(hr))
 	{
-		IFileOpenDialog *pFileOpen;
+		ComPtr<IFileOpenDialog> pFileOpen;
 
 		// Create the FileOpenDialog object.
-		hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
+		hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(pFileOpen.ReleaseAndGetAddressOf()));
 
-		// Try to set default folder to LocalLow
-		IShellItem *DefaultFolder = NULL;
-		std::wstring defaultpath;
-		wchar_t *buffer;
-		errno_t err = _wdupenv_s(&buffer, NULL, _T("USERPROFILE"));
-
-		if (!err)
+		// Try to set default folder to default savefile path
+		if (SUCCEEDED(hr))
 		{
-			defaultpath = buffer;
-			defaultpath += _T("\\AppData\\LocalLow\\Amistech\\My Summer Car\\");
-			HRESULT hrr = SHCreateItemFromParsingName((PCWSTR)defaultpath.c_str(), NULL, IID_PPV_ARGS(&DefaultFolder));
-
-			if (SUCCEEDED(hrr))
+			PWSTR pszFilePath;
+			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, NULL, NULL, &pszFilePath)))
 			{
-				pFileOpen->SetDefaultFolder(DefaultFolder);
-				DefaultFolder->Release();
+				ComPtr<IShellItem> pDefaultFolder;
+				std::wstring defaultpath = pszFilePath;
+				defaultpath += _T("\\Amistech\\My Summer Car\\");
+				if (SUCCEEDED(SHCreateItemFromParsingName((PCWSTR)defaultpath.c_str(), NULL, IID_PPV_ARGS(pDefaultFolder.ReleaseAndGetAddressOf()))))
+					pFileOpen->SetDefaultFolder(pDefaultFolder.Get());
+				CoTaskMemFree(pszFilePath);
 			}
 		}
-		free(buffer);
-		buffer = NULL;
 
 		if (SUCCEEDED(hr))
 		{
@@ -589,8 +586,8 @@ void OpenFileDialog()
 			// Get the file name from the dialog box.
 			if (SUCCEEDED(hr))
 			{
-				IShellItem *pItem;
-				hr = pFileOpen->GetResult(&pItem);
+				ComPtr<IShellItem> pItem;
+				hr = pFileOpen->GetResult(pItem.ReleaseAndGetAddressOf());
 				if (SUCCEEDED(hr))
 				{
 					PWSTR pszFilePath;
@@ -601,13 +598,9 @@ void OpenFileDialog()
 					fname = pszFileName;
 					CoTaskMemFree(pszFilePath);
 					CoTaskMemFree(pszFileName);
-					pItem->Release();
 				}
 			}
-			pFileOpen->Release();
 		}
-		CoUninitialize();
-
 		if (!fpath.empty() && !fname.empty())
 		{
 			filepath = fpath;
@@ -615,6 +608,7 @@ void OpenFileDialog()
 			InitMainDialog(hDialog);
 		}
 	}
+	CoUninitialize();
 }
 
 void UnloadFile()
@@ -685,11 +679,10 @@ bool CanClose()
 {
 	if (WasModified())
 	{
-		TCHAR buffer[128];
-		memset(buffer, 0, 128);
-		swprintf(buffer, 128, GLOB_STRS[7].c_str(), filepath.c_str());
+		std::wstring buffer(128, '\0');
+		swprintf(&buffer[0], 128, GLOB_STRS[7].c_str(), filepath.c_str());
 
-		switch (MessageBox(NULL, buffer, ErrorTitle.c_str(), MB_YESNOCANCEL | MB_ICONWARNING))
+		switch (MessageBox(NULL, buffer.c_str(), ErrorTitle.c_str(), MB_YESNOCANCEL | MB_ICONWARNING))
 		{
 		case IDNO:
 			return TRUE;
@@ -994,7 +987,7 @@ bool SaveSettings(const std::wstring &savefilename)
 			if (strInput[i] == '"')
 			{
 				buffer.replace(offset - strInput.size(), strInput.size(), L"");
-				offset = offset - strInput.size();
+				offset = offset - static_cast<uint32_t>(strInput.size());
 				break;
 			}
 		}
@@ -1318,20 +1311,45 @@ void InitMainDialog(HWND hwnd)
 	if (!EditorMap)
 	{
 		if (bStartWithMap)
-			EditorMap = new MapDialog();
+			OpenMap();
 	}
 	else
 		EditorMap->UpdateAllMapObjects();
 #endif /*_MAP*/
 }
+
 #ifdef _MAP
+void HRToStr(int nErrorCode, std::wstring& hrstr)
+{
+	DWORD len = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, nErrorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &hrstr[0], static_cast<DWORD>(hrstr.size()), NULL);
+	if (len == 0)
+		len = swprintf(&hrstr[0], hrstr.size(), _T("Error code %u"), nErrorCode);
+	hrstr.resize(len);
+}
+
 void ShowObjectOnMap(class Variable* var)
 {
-	if (!EditorMap)
-		EditorMap = new MapDialog();
+	OpenMap();
 	EditorMap->ShowObjectOnMap(var);
 }
+
+void OpenMap()
+{
+	try
+	{
+		if (!EditorMap)
+			EditorMap = new MapDialog();
+	}
+	catch (const std::wstring &str)
+	{ 
+		size_t sz = str.size() + 64;
+		std::wstring buffer(sz, '\0');
+		buffer.resize(swprintf(&buffer[0], sz, GLOB_STRS[62].c_str(), str.c_str()));
+		MessageBox(hDialog, buffer.c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
+	}
+}
 #endif /*_MAP*/
+
 int GetScrollbarPos(HWND hwnd, int bar, uint32_t code)
 {
 	SCROLLINFO si = {};
@@ -1726,7 +1744,7 @@ void UpdateBOverview(HWND hwnd, Overview *ov)
 void UpdateParent(const int &group)
 {
 	HWND hList = GetDlgItem(hDialog, IDC_List);
-	uint32_t max = SendMessage(hList, LVM_GETITEMCOUNT, 0, 0);
+	auto max = static_cast<uint32_t>(SendMessage(hList, LVM_GETITEMCOUNT, 0, 0));
 
 	LVITEM lvi = GetGroupEntry(group);
 	if (lvi.iItem != -1)
@@ -1928,7 +1946,7 @@ void UpdateList(const std::wstring &str)
 
 void FreeLPARAMS(HWND hwnd)
 {
-	uint32_t size = SendMessage(hwnd, LVM_GETITEMCOUNT, 0, 0);
+	size_t size = SendMessage(hwnd, LVM_GETITEMCOUNT, 0, 0);
 	if (size > 1)
 	{
 		for (uint32_t i = 0; i < size; i++)
@@ -1958,7 +1976,7 @@ uint32_t VectorStrToBin(const std::wstring &str, const uint32_t &size, std::stri
 {
 	std::string::size_type found = 0;
 	int *indizes = new int[size + 1]{ -1 };
-	indizes[size] = str.size();
+	indizes[size] = static_cast<int32_t>(str.size());
 	uint32_t seperators = 0;
 
 	//kill whitespaces
@@ -1977,7 +1995,7 @@ uint32_t VectorStrToBin(const std::wstring &str, const uint32_t &size, std::stri
 		{
 			found += _i;
 			seperators++;
-			indizes[seperators] = found;
+			indizes[seperators] = static_cast<int32_t>(found);
 			found++;
 		}
 	}
@@ -2161,7 +2179,7 @@ void BatchProcessBolts(bool fix)
 					{
 						boltlist.push_back(boltstate);
 					}
-					int tightness = boltlist.size() * boltstate;
+					int tightness = static_cast<uint32_t>(boltlist.size()) * boltstate;
 
 					// adjust tightness for special cases, if there are any
 					if (!partSCs.empty() && fix)
@@ -2206,7 +2224,7 @@ void BatchProcessWiring()
 					std::vector<uint32_t> boltlist;
 					for (uint32_t j = 0; j < maxbolts; j++)
 						boltlist.push_back(8);
-					int tightness = boltlist.size() * 8;
+					int tightness = static_cast<int32_t>(boltlist.size()) * 8;
 
 					if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[TRUE], carparts[i].iBolted);
 					UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
@@ -2243,7 +2261,7 @@ std::string BoltsToBin(std::vector<uint32_t> &bolts)
 {
 	if (bolts.size() == 0) return "";
 	std::string bin;
-	bin += IntToBin(bolts.size());
+	bin += IntToBin(static_cast<int32_t>(bolts.size()));
 
 	for (uint32_t i = 0; i < bolts.size(); i++)
 	{
@@ -2275,7 +2293,8 @@ int Variables_add(Variable var)
 	{
 		int n = (index - i);
 		if (n < 0) n = 0;
-		if ((uint32_t)n >= variables.size()) n = variables.size() - 1;
+		if (static_cast<uint32_t>(n) >= static_cast<uint32_t>(variables.size())) 
+			n = static_cast<uint32_t>(variables.size()) - 1;
 		if (ContainsStr(var.key, entries[variables[n].group]))
 			group = variables[n].group;
 	}
@@ -2525,11 +2544,13 @@ uint32_t ParseItemID(const std::wstring &str, const uint32_t sIndex)
 
 BOOL EntryExists(const std::wstring &str, const bool bConvert2Lower)
 {
+	if (variables.empty())
+		return -1;
 	int it;
 	std::wstring key = str;
 	if (bConvert2Lower)
 		transform(key.begin(), key.end(), key.begin(), ::tolower);
-	uint32_t startindex = (uint32_t)((((float)key[0] - 97) / 25) * variables.size());
+	uint32_t startindex = static_cast<uint32_t>(((static_cast<float>(key[0]) - 97) / 25) * variables.size());
 	variables[startindex].key != key ? variables[startindex].key > key ? it = -1 : it = 1 : it = 0;
 	if (it != 0)
 	{
@@ -2555,18 +2576,18 @@ bool StartsWithStrWildcard(const std::wstring &target, const std::wstring &str)
 		return FALSE;
 
 	std::wstring tTar = target, tStr = str;
-	uint32_t max = str.size();
+	auto max = static_cast<uint32_t>(str.size());
 	for (uint32_t i = 0; i < max; i++)
 	{
-		tTar[i] = (wchar_t)tolower(tTar[i]);
-		tStr[i] = (wchar_t)tolower(tStr[i]);
+		tTar[i] = static_cast<wchar_t>(tolower(tTar[i]));
+		tStr[i] = static_cast<wchar_t>(tolower(tStr[i]));
 		if (tTar[i] == '*')
 		{
 			tTar.replace(i, 1, L"");
 			uint32_t j = i;
 			for (; j < max && isdigit(tStr[j]); j++);
 			tStr.replace(i, j - i, L"");
-			max += -(int)(j - i);
+			max += -static_cast<int>(j - i);
 		}
 		if (tTar[i] != tStr[i] && i < max)
 			return FALSE;
@@ -2621,7 +2642,7 @@ std::wstring* SanitizeTagStr(std::wstring &str)
 	}
 	for (uint32_t i = 0; i < NameTable.size(); i++)
 	{
-		uint32_t pos1 = out.find(NameTable[i].first);
+		auto pos1 = out.find(NameTable[i].first);
 		if (pos1 != std::wstring::npos)
 		{
 			out.replace(pos1, NameTable[i].first.length(), NameTable[i].second);
@@ -2637,7 +2658,7 @@ std::wstring GetItemPrefix(const std::wstring& VariableKey)
 	{
 		std::wstring name = *SanitizeTagStr(item.GetName());
 		if (VariableKey.substr(0, name.size()) == name)
-			for (uint32_t i = name.size(); i < VariableKey.size(); i++)
+			for (auto i = static_cast<uint32_t>(name.size()); i < VariableKey.size(); i++)
 				if (!isdigit(VariableKey[i]))
 					return VariableKey.substr(0, i);
 	}
@@ -2716,7 +2737,7 @@ ErrorCode ParseSavegame()
 		else
 			SanitizeTagStr(TagStrFormatted);
 
-		variables.push_back(Variable(ValueHeader, ValueStr, variables.size(), TagStrRaw, TagStrFormatted));
+		variables.push_back(Variable(ValueHeader, ValueStr, static_cast<uint32_t>(variables.size()), TagStrRaw, TagStrFormatted));
 	}
 	iwc.close();
 	std::sort(variables.begin(), variables.end(), [](const Variable &a, const Variable &b) -> bool { return a.key < b.key; } );

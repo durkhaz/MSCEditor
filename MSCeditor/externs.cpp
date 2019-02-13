@@ -85,7 +85,7 @@ const std::wstring GLOB_STRS[] =
 	_T("\nExpected integer, but got nothing!"), //32
 	_T("\nUnexpected end of entry. Expected symbol: ") + std::wstring(1, HX_ENDENTRY), //33    
 	_T("\nNo entries!"), //34
-	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality.\n\n\nPossible solutions:\n\n - Make sure the file is in the same folder as this program.\n - Extract the compressed archive before starting.\n - If file is missing, redownload the program."), //35
+	_T("Could not locate file \"") + IniFile + _T("\"!\nStarting program with reduced functionality.\n\n\nPossible solutions:\n\n - Make sure the file is in the same folder as this program.\n - Extract the compressed archive before starting.\n - If file is missing, redownload the program.\n - Run program as administrator"), //35
 	_T("Update available! Update now?\n(Will start download in browser)\n\nChangelog:\n"), //36
 	_T("Could not write to app folder at path:\n\"%s\"\nPlease report this issue."), //37
 	_T("There are %d issues with your save that could lead to bugs in the game. Check them out now?\n (You can review the changes before saving)"), //38
@@ -112,7 +112,7 @@ const std::wstring GLOB_STRS[] =
 	_T("Distance to here"), // 59
 	_T("Clear measurement"), // 60
 	_T("NOW LOADING YEAR 1995..."), // 61
-	_T("REQUIRES WINDOWS 8.1 OR NEWER") // 62
+	_T("Map failed: %s\nPlease report this issue!") // 62
 };
 
 const std::wstring BListSymbols[] =

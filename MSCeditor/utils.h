@@ -59,7 +59,7 @@ std::wstring StringToWString(const TSTRING &s)
 template <typename TSTRING>
 void TruncTailingNulls(const TSTRING &str)
 {
-	uint32_t i = str->size() - 1;
+	auto i = static_cast<uint32_t>(str->size()) - 1;
 	for (i; str->at(i) == '\0'; i--);
 	str->resize(i + 1);
 }
@@ -115,6 +115,8 @@ void ClearStatic(HWND hStatic, HWND hDlg);
 void FreeLPARAMS(HWND hwnd);
 BOOL LoadDataFile(const std::wstring &datafilename);
 #ifdef _MAP
+void HRToStr(int nErrorCode, std::wstring& hrstr);
+void OpenMap();
 void ShowObjectOnMap(class Variable* var);
 #endif
 

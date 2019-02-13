@@ -116,21 +116,6 @@ struct SpecialCase
 	}
 };
 
-struct EntryHeader
-{
-	uint8_t ContainerType = 0x00;
-	uint32_t KeyType = UINT_MAX;
-	uint32_t ValueType = UINT_MAX;
-	uint8_t KeyProperty = 0x00;
-	uint8_t ValueProperty = 0x00;
-
-	EntryHeader(uint8_t ContainerType_, uint32_t KeyType_, uint32_t ValueType_)
-		: ContainerType(std::move(ContainerType_)), KeyType(std::move(KeyType_)), ValueType(std::move(ValueType_))
-	{
-
-	}
-};
-
 struct Overview
 {
 	uint32_t numMaxBolts = 0;

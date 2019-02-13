@@ -18,7 +18,14 @@
 #endif // NT_SUCCESS
 #define STATUS_SUCCESS 0x00000000
 
+#define MAKE_HR(her) \
+if (FAILED(her.first) && her.second[0] != s_eStr[0]) \
+sprintf_s(&(her.second)[0], s_eSz, s_eStr, __FUNCTION__, __LINE__ - 3)
+
 using Microsoft::WRL::ComPtr;
+
+static const char* s_eStr = "\nFunction \"%s\" Line %d";
+static const INT s_eSz = 128;
 
 /******************************************************************
 *                                                                 *
@@ -37,41 +44,51 @@ D2D1_POINT_2F ToRelativePos(const D2D1_POINT_2F& MapPos, const D2D1_SIZE_F& WndS
 	return D2D1::Point2F(MapPos.x / WndSize.width, MapPos.y / WndSize.height);
 }
 
-
-
-/******************************************************************
-*                                                                 *
-*  Member functions					                              *
-*                                                                 *
-******************************************************************/
-
-MapDialog::MapDialog()
-	:
-	m_hwnd(NULL),
-	m_bMapDragging(FALSE),
-	m_MapZoom(1.f),
-	m_MarkerRadius(10.f),
-	m_MapViewCenterPos(D2D1::Point2F(0.5f, 0.5f)),
-	m_MapWindowMousePos(D2D1_POINT_2F()),
-	m_MapDragPrevPt(D2D1_POINT_2F()),
-	m_SidebarListCurrentScrollpos(0),
-	m_SidebarListScrollRange(0),
-	m_DialogMapSize(D2D1_SIZE_U())
+FLOAT GetDistanceBetweenTwoPoints(const D2D1_POINT_2F* p1, const D2D1_POINT_2F* p2)
 {
-	m_MapDDSPath = appfolderpath;
-	AppendPath(m_MapDDSPath, s_MapDDSName);
-	m_hwnd = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_MAP), NULL, MapDialog::MainProc, reinterpret_cast<LPARAM>(this));
+	return sqrt(((p2->x - p1->x) * (p2->x - p1->x)) + ((p2->y - p1->y) * (p2->y - p1->y)));
 }
 
-MapDialog::~MapDialog()
+FLOAT lerp(FLOAT s, FLOAT e, FLOAT t)
 {
-	m_IWICFactory.Reset();
-	m_SidebarAssortedItems.clear();
-	m_SidebarItems.clear();
-	m_MapMarkersSelected.clear();
-	m_MapMarkers.clear();
-	CoUninitialize();
-	EditorMap = NULL;
+	return s + (e - s)*t;
+}
+
+FLOAT blerp(FLOAT c00, FLOAT c10, FLOAT c01, FLOAT c11, FLOAT tx, FLOAT ty)
+{
+	return lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty);
+}
+
+D2D1_SIZE_F GetCursorSize()
+{
+	// We essentially just look for the first transparent pixel on a cursor bitmap to determine its size
+	D2D1_SIZE_F size;
+	int i, j, n, width, height;
+
+	ICONINFO ii;
+	BITMAP bitmap;
+	GetIconInfo((HICON)GetCursor(), &ii);
+	GetObject(ii.hbmMask, sizeof(BITMAP), &bitmap);
+	width = bitmap.bmWidth;
+	if (ii.hbmColor == NULL)
+		height = bitmap.bmHeight / 2;
+	else
+		height = bitmap.bmHeight;
+
+	HDC dc = CreateCompatibleDC(GetDC(hDialog));
+	SelectObject(dc, ii.hbmMask);
+	for (i = 0, n = 0; i < width; i++)
+		for (j = 0; j < height; j++)
+			if (GetPixel(dc, i, j) != RGB(255, 255, 255))
+				if (n < j)
+					n = j;
+
+	DeleteDC(dc);
+	DeleteObject(ii.hbmColor);
+	DeleteObject(ii.hbmMask);
+	size.height = static_cast<FLOAT>(n - ii.yHotspot);
+	size.width = size.height;
+	return size;
 }
 
 namespace Obfuscate
@@ -95,88 +112,161 @@ namespace Obfuscate
 	}
 }
 
+HRESULT PrepareResource(BYTE** pResource, DWORD& imageFileSize)
+{
+	HRESULT hr = S_OK;
+	HGLOBAL imageResDataHandle = NULL;
+	void* pImageFile = NULL;
+	imageFileSize = 0;
+
+	// Locate the resource.
+	HRSRC imageResHandle = FindResource(NULL, MAKEINTRESOURCE(IDR_MAPJPG), L"JPG");
+	hr = imageResHandle ? S_OK : E_FAIL;
+	if (SUCCEEDED(hr))
+	{
+		// Load the resource.
+		imageResDataHandle = LoadResource(NULL, imageResHandle);
+		hr = imageResDataHandle ? S_OK : E_FAIL;
+	}
+	if (SUCCEEDED(hr))
+	{
+		// Lock it to get a system memory pointer.
+		pImageFile = LockResource(imageResDataHandle);
+		hr = pImageFile ? S_OK : E_FAIL;
+	}
+	if (SUCCEEDED(hr))
+	{
+		// Calculate the size.
+		imageFileSize = SizeofResource(NULL, imageResHandle);
+		hr = imageFileSize ? S_OK : E_FAIL;
+	}
+	if (SUCCEEDED(hr))
+	{
+		*pResource = new BYTE[imageFileSize]();
+		hr = Obfuscate::DeobfuscateResource(reinterpret_cast<BYTE*>(pImageFile), imageFileSize, *pResource);
+	}
+	if (SUCCEEDED(hr))
+	{
+		hr = Obfuscate::IsValidJPG(*pResource, imageFileSize);
+		if (FAILED(hr))
+		{
+			delete[] *pResource;
+			*pResource = NULL;
+		}
+	}
+	FreeResource(imageResDataHandle);
+	return hr;
+}
+
+/******************************************************************
+*                                                                 *
+*  Member functions					                              *
+*                                                                 *
+******************************************************************/
+
+MapDialog::MapDialog()
+	:
+	m_hwnd(NULL),
+	m_bMapDragging(FALSE),
+	m_MapZoom(1.f),
+	m_MarkerRadius(10.f),
+	m_MapViewCenterPos(D2D1::Point2F(0.5f, 0.5f)),
+	m_MapWindowMousePos(D2D1_POINT_2F()),
+	m_MapDragPrevPt(D2D1_POINT_2F()),
+	m_SidebarListCurrentScrollpos(0),
+	m_SidebarListScrollRange(0),
+	m_DialogMapSize(D2D1_SIZE_U()),
+	m_SatsumaTransformIndex(UINT_MAX)
+{
+	m_MapDDSPath = appfolderpath;
+	AppendPath(m_MapDDSPath, s_MapDDSName);
+	try
+	{
+		CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_MAP), NULL, MapDialog::MainProc, reinterpret_cast<LPARAM>(this));
+	}
+	catch (...) 
+	{ 
+		DestroyWindow(m_hwnd);
+		CoUninitialize();
+		throw; 
+	}
+}
+
+MapDialog::~MapDialog()
+{
+	m_SidebarAssortedItems.clear();
+	m_SidebarAssortedItems.shrink_to_fit();
+	m_SidebarItems.clear();
+	m_SidebarItems.shrink_to_fit();
+	m_MapMarkersSelected.clear();
+	m_MapMarkersSelected.shrink_to_fit();
+	m_MapDistanceNodes.clear();
+	m_MapDistanceNodes.shrink_to_fit();
+	std::forward_list<SidebarListEntry*>().swap(m_MapMarkers);
+	CoUninitialize();
+	EditorMap = NULL;
+}
+
+HERROR MapDialog::PrepareRawImage(BYTE** pDeobfuscatedResource, ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const bool bIsDDS)
+{
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
+	ComPtr<IWICStream> pResourceStream;
+	ComPtr<IWICBitmapDecoder> pJPGDecoder;
+	ComPtr<IWICBitmapFrameDecode> pRawImage;
+
+	// Create a WIC stream to map onto the memory.
+	hr.first = m_IWICFactory->CreateStream(pResourceStream.GetAddressOf());
+
+	MAKE_HR(hr);
+
+	// Initialize the stream with the memory pointer and size.
+	if (SUCCEEDED(hr.first))
+		hr.first = pResourceStream->InitializeFromMemory(*pDeobfuscatedResource, imageFileSize);
+
+	MAKE_HR(hr);
+
+	// Create a decoder for the stream.
+	if (SUCCEEDED(hr.first))
+		hr.first = m_IWICFactory->CreateDecoderFromStream(pResourceStream.Get(), NULL, WICDecodeMetadataCacheOnLoad, pJPGDecoder.GetAddressOf());
+
+	MAKE_HR(hr);
+
+	// Create the initial frame.
+	if (SUCCEEDED(hr.first))
+		hr.first = pJPGDecoder->GetFrame(0, pRawImage.GetAddressOf());
+
+	MAKE_HR(hr);
+
+	if (SUCCEEDED(hr.first))
+		hr.first = m_IWICFactory->CreateFormatConverter(pConverter.GetAddressOf());
+
+	MAKE_HR(hr);
+
+	// Convert the image format to 32bppPBGRA
+	// (DXGI_FORMAT_B8G8R8A8_UNORM + D2D1_ALPHA_MODE_PREMULTIPLIED).
+	if (SUCCEEDED(hr.first))
+		hr.first = pConverter->Initialize(pRawImage.Get(), bIsDDS ? GUID_WICPixelFormat32bppBGR : GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0.f, bIsDDS ? WICBitmapPaletteTypeMedianCut : WICBitmapPaletteTypeCustom);
+
+	MAKE_HR(hr);
+
+	return hr;
+}
+
 void MapDialog::PrepareMapDDS()
 {
-	LOG(L"Map : CreateDeviceIndependentResources spawned DDS worker thread\n");
-	HRESULT hr = S_OK;
+	LOG(L"Map : CreateDeviceIndependentResources spawned DDS worker thread Win8\n");
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
 	BYTE* pDeobfuscatedResource = NULL;
-	ComPtr<IWICBitmapFrameDecode> pRawImage;
+	ComPtr<IWICFormatConverter> pRawImage;
+
 	{
-		ComPtr<IWICBitmapDecoder> pJPGDecoder;
-		ComPtr<IWICFormatConverter> pConverter;
-		ComPtr<IWICStream> pResourceStream;
+		DWORD imageFileSize;
+		// Lock and allocate resource
+		hr.first = PrepareResource(&pDeobfuscatedResource, imageFileSize);
 
-		HGLOBAL imageResDataHandle = NULL;
-		void* pImageFile = NULL;
-		DWORD imageFileSize = 0;
-
-		// Locate the resource.
-		HRSRC imageResHandle = FindResource(NULL, MAKEINTRESOURCE(IDR_MAPJPG), L"JPG");
-		hr = imageResHandle ? S_OK : E_FAIL;
-		if (SUCCEEDED(hr))
-		{
-			// Load the resource.
-			imageResDataHandle = LoadResource(NULL, imageResHandle);
-			hr = imageResDataHandle ? S_OK : E_FAIL;
-		}
-		if (SUCCEEDED(hr))
-		{
-			// Lock it to get a system memory pointer.
-			pImageFile = LockResource(imageResDataHandle);
-			hr = pImageFile ? S_OK : E_FAIL;
-		}
-		if (SUCCEEDED(hr))
-		{
-			// Calculate the size.
-			imageFileSize = SizeofResource(NULL, imageResHandle);
-			hr = imageFileSize ? S_OK : E_FAIL;
-		}
-		if (SUCCEEDED(hr))
-		{
-			pDeobfuscatedResource = new BYTE[imageFileSize]();
-			hr = Obfuscate::DeobfuscateResource(reinterpret_cast<BYTE*>(pImageFile), imageFileSize, pDeobfuscatedResource);
-		}
-		if (SUCCEEDED(hr))
-		{
-			hr = Obfuscate::IsValidJPG(pDeobfuscatedResource, imageFileSize);
-			if (FAILED(hr))
-			{
-				delete[] pDeobfuscatedResource;
-				pDeobfuscatedResource = NULL;
-			}
-		}
-		if (SUCCEEDED(hr))
-		{
-			// Create a WIC stream to map onto the memory.
-			hr = m_IWICFactory->CreateStream(pResourceStream.GetAddressOf());
-		}
-
-		if (SUCCEEDED(hr))
-		{
-			// Initialize the stream with the memory pointer and size.
-			hr = pResourceStream->InitializeFromMemory(pDeobfuscatedResource, imageFileSize);
-		}
-
-		if (SUCCEEDED(hr))
-		{
-			// Create a decoder for the stream.
-			hr = m_IWICFactory->CreateDecoderFromStream( pResourceStream.Get(), NULL, WICDecodeMetadataCacheOnLoad, pJPGDecoder.GetAddressOf());
-		}
-		if (SUCCEEDED(hr))
-		{
-			// Create the initial frame.
-			hr = pJPGDecoder->GetFrame(0, pRawImage.GetAddressOf());
-		}
-		if (SUCCEEDED(hr))
-		{
-			hr = m_IWICFactory->CreateFormatConverter(pConverter.GetAddressOf());
-		}
-		if (SUCCEEDED(hr))
-		{
-			// Convert the image format to 32bppPBGRA
-			// (DXGI_FORMAT_B8G8R8A8_UNORM + D2D1_ALPHA_MODE_PREMULTIPLIED).
-			hr = pConverter->Initialize(pRawImage.Get(), GUID_WICPixelFormat32bppBGR, WICBitmapDitherTypeNone, NULL, 0.f, WICBitmapPaletteTypeMedianCut);
-		}
+		// Convert JPG to raw image
+		if (SUCCEEDED(hr.first))
+			hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize);
 	}
 
 	// Encode and save DDS
@@ -187,7 +277,7 @@ void MapDialog::PrepareMapDDS()
 		ComPtr<IWICStream> pOutStream;
 		WICDdsParameters DDSParams = { 0 };
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr.first))
 		{
 			UINT JPGHeight = UINT_MAX, JPGWidth = UINT_MAX;
 			pRawImage->GetSize(&JPGWidth, &JPGHeight);
@@ -200,46 +290,46 @@ void MapDialog::PrepareMapDDS()
 			DDSParams.Width = JPGWidth;
 			DDSParams.MipLevels = 1;
 		}
-		if (SUCCEEDED(hr))
-			hr = m_IWICFactory->CreateStream(pOutStream.GetAddressOf());
+		if (SUCCEEDED(hr.first))
+			hr.first = m_IWICFactory->CreateStream(pOutStream.GetAddressOf());
 
-		if (SUCCEEDED(hr))
-			hr = FindAndCreateAppFolder();
+		if (SUCCEEDED(hr.first))
+			hr.first = FindAndCreateAppFolder();
 
-		if (SUCCEEDED(hr))
-			hr = pOutStream->InitializeFromFilename(m_MapDDSPath.c_str(), GENERIC_WRITE | GENERIC_READ);
+		if (SUCCEEDED(hr.first))
+			hr.first = pOutStream->InitializeFromFilename(m_MapDDSPath.c_str(), GENERIC_WRITE | GENERIC_READ);
 
-		if (SUCCEEDED(hr))
-			hr = m_IWICFactory->CreateEncoder(GUID_ContainerFormatDds, NULL, pBitMapEncoder.GetAddressOf());
+		if (SUCCEEDED(hr.first))
+			hr.first = m_IWICFactory->CreateEncoder(GUID_ContainerFormatDds, NULL, pBitMapEncoder.GetAddressOf());
 
-		if (SUCCEEDED(hr))
-			hr = pBitMapEncoder->Initialize(pOutStream.Get(), WICBitmapEncoderNoCache);
+		if (SUCCEEDED(hr.first))
+			hr.first = pBitMapEncoder->Initialize(pOutStream.Get(), WICBitmapEncoderNoCache);
 
-		if (SUCCEEDED(hr))
-			hr = pBitMapEncoder.As(&pDDSEncoder);
+		if (SUCCEEDED(hr.first))
+			hr.first = pBitMapEncoder.As(&pDDSEncoder);
 
-		if (SUCCEEDED(hr))
-			hr = pDDSEncoder->SetParameters(&DDSParams);
+		if (SUCCEEDED(hr.first))
+			hr.first = pDDSEncoder->SetParameters(&DDSParams);
 	
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr.first))
 		{
 			UINT ArrayIndex = UINT_MAX, MipLevelIndex = UINT_MAX, SliceIndex = UINT_MAX;
-			hr = pDDSEncoder->CreateNewFrame(pDDSFrame.GetAddressOf(), &ArrayIndex, &MipLevelIndex, &SliceIndex);
+			hr.first = pDDSEncoder->CreateNewFrame(pDDSFrame.GetAddressOf(), &ArrayIndex, &MipLevelIndex, &SliceIndex);
 		}
-		if (SUCCEEDED(hr))
-			hr = pDDSFrame->Initialize(NULL);
+		if (SUCCEEDED(hr.first))
+			hr.first = pDDSFrame->Initialize(NULL);
 
-		if (SUCCEEDED(hr))
-			hr = pDDSFrame->WriteSource(pRawImage.Get(), NULL);
+		if (SUCCEEDED(hr.first))
+			hr.first = pDDSFrame->WriteSource(pRawImage.Get(), NULL);
 
-		if (SUCCEEDED(hr))
-			hr = pDDSFrame->Commit();
+		if (SUCCEEDED(hr.first))
+			hr.first = pDDSFrame->Commit();
 
-		if (SUCCEEDED(hr))
-			hr = pBitMapEncoder->Commit();
+		if (SUCCEEDED(hr.first))
+			hr.first = pBitMapEncoder->Commit();
 
-		if (SUCCEEDED(hr))
-			hr = Obfuscate::ObfuscateIStream(pOutStream.Get());
+		if (SUCCEEDED(hr.first))
+			hr.first = Obfuscate::ObfuscateIStream(pOutStream.Get());
 
 		if (pDeobfuscatedResource)
 		{
@@ -248,80 +338,122 @@ void MapDialog::PrepareMapDDS()
 		}
 	}
 
-	LOG(L"Map : PrepareMapDDS thread finished " + std::wstring(SUCCEEDED(hr) ? L"successfully" : L"failed") + L"!\n");
+	LOG(L"Map : PrepareMapDDS thread finished " + std::wstring(SUCCEEDED(hr.first) ? L"successfully" : L"failed") + L"!\n");
 
-	if (SUCCEEDED(hr))
-		hr = IsMapDDSValid() ? S_OK : E_FAIL;
+	if (SUCCEEDED(hr.first))
+		hr.first = IsMapDDSValid() ? S_OK : E_FAIL;
 
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr.first))
 		hr = LoadDDS(TRUE);
 
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr.first))
 		OnMapRender(m_MapRenderTarget->GetHwnd());
 }
 
-LRESULT MapDialog::LoadDDS(const bool bCalledFromThread)
+HERROR MapDialog::LoadJPG()
 {
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
+	ComPtr<IWICFormatConverter> pRawImage;
+	BYTE* pDeobfuscatedResource = NULL;
+	DWORD imageFileSize;
+
+	// Lock and allocate resource
+	hr.first = PrepareResource(&pDeobfuscatedResource, imageFileSize);
+
+	MAKE_HR(hr);
+
+	// Convert JPG to raw image
+	if (SUCCEEDED(hr.first))
+		hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize, FALSE);
+
+	// If the rendertarget isn't valid, exit here
+	if (SUCCEEDED(hr.first) && !m_MapRenderTarget)
+		hr.first = E_FAIL;
+
+	MAKE_HR(hr);
+
+	if (SUCCEEDED(hr.first))
+		hr.first = m_MapRenderTarget->CreateBitmapFromWicBitmap(pRawImage.Get(), NULL, m_MapBitmap.ReleaseAndGetAddressOf());
+
+	MAKE_HR(hr);
+
+	// Update the map
+	if (SUCCEEDED(hr.first))
+		OnMapRender(m_MapRenderTarget->GetHwnd());
+
+	LOG(L"Map : LoadJPG " + std::wstring(SUCCEEDED(hr.first) ? L"successful" : L"failed") + L"!\n");
+	return hr;
+}
+
+HERROR MapDialog::LoadDDS(const bool bCalledFromThread)
+{
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
 	ComPtr<IWICBitmapDecoder> pDecoder;
 	ComPtr<IWICBitmapFrameDecode> pFrame;
 	ComPtr<IStream> pInStream;
+	ComPtr<IStream> pDeobfuscatedStream;
 
 #ifdef _MAP
 	// If this is called from the worker thread after the object it is called from is destroyed underneath it
-	HRESULT hr = EditorMap || !bCalledFromThread ? S_OK : E_FAIL;
-#else
-	HRESULT hr = S_OK;
+	hr.first = EditorMap || !bCalledFromThread ? S_OK : E_FAIL;
 #endif /*_MAP*/
-	
-	if (SUCCEEDED(hr))
-		hr = IsWindows8OrGreater() ? S_OK : E_FAIL;
 
-	if (SUCCEEDED(hr) && !m_MapRenderTarget)
-		hr = E_FAIL;
+	if (SUCCEEDED(hr.first) && !m_MapRenderTarget)
+		hr.first = E_FAIL;
 
-	ComPtr<IStream> pDeobfuscatedStream;
-	if (SUCCEEDED(hr))
-		hr = SHCreateStreamOnFileEx(m_MapDDSPath.c_str(), STGM_READ, NULL, FALSE, NULL, pInStream.GetAddressOf());
+	MAKE_HR(hr);
 
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr.first))
+		hr.first = SHCreateStreamOnFileEx(m_MapDDSPath.c_str(), STGM_READ, NULL, FALSE, NULL, pInStream.GetAddressOf());
+
+	MAKE_HR(hr);
+
+	if (SUCCEEDED(hr.first))
 	{
 		STATSTG stat;
-		hr = pInStream->Stat(&stat, 0);
+		hr.first = pInStream->Stat(&stat, 0);
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr.first))
 		{
-			pDeobfuscatedStream = SHCreateMemStream(NULL, 0);
-			hr = pDeobfuscatedStream ? S_OK : E_OUTOFMEMORY;
+			pDeobfuscatedStream.Attach(SHCreateMemStream(NULL, 0));
+			hr.first = pDeobfuscatedStream ? S_OK : E_OUTOFMEMORY;
 		}
 
-		if (SUCCEEDED(hr))
-			hr = pDeobfuscatedStream->SetSize(stat.cbSize);
+		MAKE_HR(hr);
+
+		if (SUCCEEDED(hr.first))
+			hr.first = pDeobfuscatedStream->SetSize(stat.cbSize);
+
+		MAKE_HR(hr);
 
 		ULARGE_INTEGER BytesWritten, BytesRead;
-		if (SUCCEEDED(hr))
-			hr = pInStream->CopyTo(pDeobfuscatedStream.Get(), stat.cbSize, &BytesRead, &BytesWritten);
+		if (SUCCEEDED(hr.first))
+			hr.first = pInStream->CopyTo(pDeobfuscatedStream.Get(), stat.cbSize, &BytesRead, &BytesWritten);
+
+		MAKE_HR(hr);
 	}
 
-	if (SUCCEEDED(hr))
-		hr = Obfuscate::ObfuscateIStream(pDeobfuscatedStream.Get());
+	if (SUCCEEDED(hr.first))
+		hr.first = Obfuscate::ObfuscateIStream(pDeobfuscatedStream.Get());
 
-	if (SUCCEEDED(hr))
-		hr = m_IWICFactory->CreateDecoderFromStream(pDeobfuscatedStream.Get(), NULL, WICDecodeMetadataCacheOnDemand, pDecoder.GetAddressOf());
+	MAKE_HR(hr);
 
+	if (SUCCEEDED(hr.first))
+		hr.first = m_IWICFactory->CreateDecoderFromStream(pDeobfuscatedStream.Get(), NULL, WICDecodeMetadataCacheOnDemand, pDecoder.GetAddressOf());
 
-	//if (SUCCEEDED(hr))
-	//	hr = m_IWICFactory->CreateDecoderFromFilename(m_MapDDSPath.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, pDecoder.GetAddressOf());
+	MAKE_HR(hr);
 
-	if (SUCCEEDED(hr))
-		hr = pDecoder->GetFrame(0, pFrame.GetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = pDecoder->GetFrame(0, pFrame.GetAddressOf());
 
-	if (SUCCEEDED(hr))
-	{
-		// Need to release the previous D2DBitmap if there is one
-		m_MapBitmap.Reset();
-		hr = m_MapRenderTarget->CreateBitmapFromWicBitmap(pFrame.Get(), NULL, m_MapBitmap.ReleaseAndGetAddressOf());
-	}
-	LOG(L"Map : LoadDDS " + std::wstring(SUCCEEDED(hr) ? L"successful" : L"failed") + L"!\n");
+	MAKE_HR(hr);
+
+	if (SUCCEEDED(hr.first))
+		hr.first = m_MapRenderTarget->CreateBitmapFromWicBitmap(pFrame.Get(), NULL, m_MapBitmap.ReleaseAndGetAddressOf());
+
+	MAKE_HR(hr);
+
+	LOG(L"Map : LoadDDS " + std::wstring(SUCCEEDED(hr.first) ? L"successful" : L"failed") + L"!\n");
 	return hr;
 }
 
@@ -382,7 +514,7 @@ bool MapDialog::IsMapDDSValid()
 
 	// Hash DDS
 	if (NT_SUCCESS(nts))
-		nts = BCryptHashData(hHash, (PBYTE)buffer.c_str(), buffer.size(), 0);
+		nts = BCryptHashData(hHash, (PBYTE)buffer.c_str(), static_cast<ULONG>(buffer.size()), 0);
 		
 	// Close the hash
 	if (NT_SUCCESS(nts))
@@ -411,10 +543,9 @@ bool MapDialog::IsMapDDSValid()
 	return Result;
 }
 
-HRESULT MapDialog::CreateDeviceResources()
+HERROR MapDialog::CreateDeviceResources()
 {
-	HRESULT hr = S_OK;
-
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
 	if (m_MapRenderTarget && m_SidebarListRenderTarget && m_SidebarRenderTarget && m_SidebarInfoRenderTarget)
 		return hr;
 
@@ -424,23 +555,25 @@ HRESULT MapDialog::CreateDeviceResources()
 	D2D1_SIZE_U MapSize, SidebarSize, SidebarListSize, SidebarInfoSize;
 	{
 		RECT rc;
-		hr = GetClientRect(m_hDialogMap, &rc) ? S_OK : E_FAIL;
+		hr.first = GetClientRect(m_hDialogMap, &rc) ? S_OK : E_FAIL;
 		MapSize = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
-		if (SUCCEEDED(hr))
-			hr = GetClientRect(m_hDialogSidebar, &rc) ? S_OK : E_FAIL;
+		if (SUCCEEDED(hr.first))
+			hr.first = GetClientRect(m_hDialogSidebar, &rc) ? S_OK : E_FAIL;
 
 		SidebarSize = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
-		if (SUCCEEDED(hr))
-			hr = GetClientRect(m_hDialogSidebarList, &rc) ? S_OK : E_FAIL;
+		if (SUCCEEDED(hr.first))
+			hr.first = GetClientRect(m_hDialogSidebarList, &rc) ? S_OK : E_FAIL;
 
 		SidebarListSize = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
-		if (SUCCEEDED(hr))
-			hr = GetClientRect(m_hDialogSidebarInfo, &rc) ? S_OK : E_FAIL;
+		if (SUCCEEDED(hr.first))
+			hr.first = GetClientRect(m_hDialogSidebarInfo, &rc) ? S_OK : E_FAIL;
 
 		SidebarInfoSize = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
+
+		MAKE_HR(hr);
 	}
 
 	// Create a D2D render target properties
@@ -448,10 +581,10 @@ HRESULT MapDialog::CreateDeviceResources()
 	{
 		// Get system DPI
 		FLOAT dpi_x, dpi_y;
-		if (SUCCEEDED(hr))
-			hr = m_D2DFactory->ReloadSystemMetrics();
+		if (SUCCEEDED(hr.first))
+			hr.first = m_D2DFactory->ReloadSystemMetrics();
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr.first))
 			m_D2DFactory->GetDesktopDpi(&dpi_x, &dpi_y);
 
 		// Create a pixel format and initial its format
@@ -463,74 +596,91 @@ HRESULT MapDialog::CreateDeviceResources()
 		renderTargetProperties.dpiX = dpi_x;
 		renderTargetProperties.dpiY = dpi_y;
 		renderTargetProperties.pixelFormat = pixelFormat;
+
+		MAKE_HR(hr);
 	}
 
-	if (SUCCEEDED(hr))
-		hr = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogMap, MapSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_MapRenderTarget.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogMap, MapSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_MapRenderTarget.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebar, SidebarSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarRenderTarget.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebar, SidebarSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarRenderTarget.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebarList, SidebarListSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarListRenderTarget.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebarList, SidebarListSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarListRenderTarget.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebarInfo, SidebarInfoSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarInfoRenderTarget.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_D2DFactory->CreateHwndRenderTarget(renderTargetProperties, D2D1::HwndRenderTargetProperties(m_hDialogSidebarInfo, SidebarInfoSize, D2D1_PRESENT_OPTIONS_IMMEDIATELY), m_SidebarInfoRenderTarget.ReleaseAndGetAddressOf());
+
+	MAKE_HR(hr);
 
 	// Instantiate brushes
-	if (SUCCEEDED(hr))
-		hr = m_MapRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_MapSceneBrush.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_MapRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_MapSceneBrush.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_SidebarRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarSceneBrush.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_SidebarRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarSceneBrush.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_SidebarListRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarListSceneBrush.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_SidebarListRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarListSceneBrush.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = m_SidebarInfoRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarInfoSceneBrush.ReleaseAndGetAddressOf());
+	if (SUCCEEDED(hr.first))
+		hr.first = m_SidebarInfoRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::HotPink), m_SidebarInfoSceneBrush.ReleaseAndGetAddressOf());
+
+	MAKE_HR(hr);
 
 	// Load and convert bitmap
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr.first))
 	{
-		if (IsMapDDSValid())
-			hr = LoadDDS();
+		// On Windows 7 and below, we skip block compression
+		if (IsWindows8OrGreater())
+		{
+			if (IsMapDDSValid())
+				hr = LoadDDS();
+			else
+				std::thread(&MapDialog::PrepareMapDDS, this).detach();
+		}
 		else
-			std::thread(&MapDialog::PrepareMapDDS, this).detach();
+			hr = LoadJPG();
 	}
 
-	LOG(L"Map : CreateDeviceResources " + std::wstring(SUCCEEDED(hr) ? L"successful" : L"failed") + L"!\n");
+	MAKE_HR(hr);
+
+	LOG(L"Map : CreateDeviceResources " + std::wstring(SUCCEEDED(hr.first) ? L"successful" : L"failed") + L"!\n");
 	return hr;
 }
 
-LRESULT MapDialog::CreateDeviceIndependentResources()
+HERROR MapDialog::CreateDeviceIndependentResources()
 {
-	HRESULT hr;
+	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
 
-	hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_D2DFactory.ReleaseAndGetAddressOf());
+	hr.first = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_D2DFactory.ReleaseAndGetAddressOf());
 
-	if (SUCCEEDED(hr))
-		hr = CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(m_IWICFactory.ReleaseAndGetAddressOf()));
+	if (SUCCEEDED(hr.first))
+		hr.first = CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(m_IWICFactory.ReleaseAndGetAddressOf()));
 
-	if (SUCCEEDED(hr))
+	MAKE_HR(hr);
+
+	if (SUCCEEDED(hr.first))
 		hr = CreateDeviceResources();
+
+	MAKE_HR(hr);
 
 	// Prepare geometry
 	{
 		ComPtr<ID2D1GeometrySink> Sink;
 		{
 			// Google maps-like marker
-			if (SUCCEEDED(hr))
-				hr = m_D2DFactory->CreatePathGeometry(m_MapMarkerGeometry.ReleaseAndGetAddressOf());
+			if (SUCCEEDED(hr.first))
+				hr.first = m_D2DFactory->CreatePathGeometry(m_MapMarkerGeometry.ReleaseAndGetAddressOf());
 
-			if (SUCCEEDED(hr))
-				hr = m_MapMarkerGeometry->Open(Sink.GetAddressOf());
+			if (SUCCEEDED(hr.first))
+				hr.first = m_MapMarkerGeometry->Open(Sink.GetAddressOf());
 
-			if (SUCCEEDED(hr))
+			if (SUCCEEDED(hr.first))
 			{
 				Sink->BeginFigure(D2D1::Point2F(0.f, 0.f), D2D1_FIGURE_BEGIN_FILLED);
 				Sink->SetFillMode(D2D1_FILL_MODE_WINDING);
-
 				Sink->AddBezier( D2D1::BezierSegment(
 					D2D1::Point2F(-0.05f * m_MarkerRadius, -0.5f * m_MarkerRadius),
 					D2D1::Point2F(-m_MarkerRadius, -0.625f * m_MarkerRadius),
@@ -544,61 +694,69 @@ LRESULT MapDialog::CreateDeviceIndependentResources()
 					D2D1::Point2F(0.05f * m_MarkerRadius, -0.5f * m_MarkerRadius),
 					D2D1::Point2F(0.f, 0.f)));
 				Sink->EndFigure(D2D1_FIGURE_END_OPEN);
-				hr = Sink->Close();
+				hr.first = Sink->Close();
 			}
 			// Arrow marker for off map objects
 			static D2D1_POINT_2F ArrowPoints[] = { D2D1::Point2F(m_MarkerRadius * -1.f, m_MarkerRadius * -1.f), D2D1::Point2F(0, m_MarkerRadius * -0.8f), D2D1::Point2F(m_MarkerRadius * 1.f, m_MarkerRadius * -1.f), D2D1::Point2F(0, 0)};
 
-			if (SUCCEEDED(hr))
-				hr = m_D2DFactory->CreatePathGeometry(m_MapArrowMarkerGeometry.ReleaseAndGetAddressOf());
+			if (SUCCEEDED(hr.first))
+				hr.first = m_D2DFactory->CreatePathGeometry(m_MapArrowMarkerGeometry.ReleaseAndGetAddressOf());
 
-			if (SUCCEEDED(hr))
-				hr = m_MapArrowMarkerGeometry->Open(Sink.GetAddressOf());
+			if (SUCCEEDED(hr.first))
+				hr.first = m_MapArrowMarkerGeometry->Open(Sink.GetAddressOf());
 
-			if (SUCCEEDED(hr))
+			if (SUCCEEDED(hr.first))
 			{
 				Sink->BeginFigure(D2D1::Point2F(0.f, 0.f), D2D1_FIGURE_BEGIN_FILLED);
 				Sink->SetFillMode(D2D1_FILL_MODE_WINDING);
 				Sink->AddLines(ArrowPoints, ARRAYSIZE(ArrowPoints));
 				Sink->EndFigure(D2D1_FIGURE_END_OPEN);
-				hr = Sink->Close();
+				hr.first = Sink->Close();
 			}
+
+			MAKE_HR(hr);
 		}
 	}
 
 	// Prepare Texts
 	{
 		// Create a DirectWrite factory.
-		if (SUCCEEDED(hr))
-			hr = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof(m_DWriteFactory.Get()), reinterpret_cast<IUnknown **>(m_DWriteFactory.ReleaseAndGetAddressOf()));
+		if (SUCCEEDED(hr.first))
+			hr.first = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof(m_DWriteFactory.Get()), reinterpret_cast<IUnknown **>(m_DWriteFactory.ReleaseAndGetAddressOf()));
 		
+		MAKE_HR(hr);
+
 		// Create a DirectWrite text format object.
-		if (SUCCEEDED(hr))
-			hr = m_DWriteFactory->CreateTextFormat( L"Consolas", NULL, DWRITE_FONT_WEIGHT_THIN, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10, L"", m_MonospaceTextFormat.ReleaseAndGetAddressOf() );
+		if (SUCCEEDED(hr.first))
+			hr.first = m_DWriteFactory->CreateTextFormat( L"Consolas", NULL, DWRITE_FONT_WEIGHT_THIN, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10, L"", m_MonospaceTextFormat.ReleaseAndGetAddressOf() );
+
+		MAKE_HR(hr);
 
 		// Center the text vertically.
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr.first))
 		{
-			hr = m_MonospaceTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-			hr = m_MonospaceTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+			hr.first = m_MonospaceTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+			hr.first = m_MonospaceTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 		}
 
 		// List Text
-		if (SUCCEEDED(hr))
-			hr = m_DWriteFactory->CreateTextFormat(L"Tahoma", NULL, DWRITE_FONT_WEIGHT_ULTRA_BLACK, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12, L"", m_ListTextFormat.ReleaseAndGetAddressOf());
+		if (SUCCEEDED(hr.first))
+			hr.first = m_DWriteFactory->CreateTextFormat(L"Tahoma", NULL, DWRITE_FONT_WEIGHT_ULTRA_BLACK, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12, L"", m_ListTextFormat.ReleaseAndGetAddressOf());
 
-		if (SUCCEEDED(hr))
+		MAKE_HR(hr);
+
+		if (SUCCEEDED(hr.first))
 		{
-			hr = m_ListTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-			hr = m_ListTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+			hr.first = m_ListTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+			hr.first = m_ListTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 		}
 		// Set the text format not to allow word wrapping.
-		if (SUCCEEDED(hr))
-			hr = m_ListTextFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+		if (SUCCEEDED(hr.first))
+			hr.first = m_ListTextFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 	}
-	LOG(L"Map : CreateDeviceIndependentResources " + std::wstring(SUCCEEDED(hr) ? L"successful" : L"failed") + L"!\n");
+	LOG(L"Map : CreateDeviceIndependentResources " + std::wstring(SUCCEEDED(hr.first) ? L"successful" : L"failed") + L"!\n");
 
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr.first))
 		UpdateAllMapObjects(FALSE);
 
 	return hr;
@@ -673,6 +831,8 @@ void MapDialog::ClearAllMapObjects(bool bForceReRender /*= TRUE*/)
 	m_SidebarListScrollRange = s_MapSidebarListEntryHeight * 3;
 	SidebarUpdateScrollbar();
 
+	m_SatsumaTransformIndex = UINT_MAX;
+
 	if (bForceReRender)
 	{
 		OnMapRender(m_MapRenderTarget->GetHwnd());
@@ -716,43 +876,14 @@ void MapDialog::UpdateAllMapObjects(bool bForceReRender)
 	for (uint32_t i = 0; i < m_SidebarAssortedItems.size(); i++)
 		m_SidebarItems.push_back(SidebarListEntry(2, i, UINT_MAX, FALSE));
 
+	// Store index to Satsuma transform, used by carparts
+	m_SatsumaTransformIndex = EntryExists(L"cartransform");
+
 	if (bForceReRender)
 	{
 		OnMapRender(m_MapRenderTarget->GetHwnd());
 		OnSidebarListRender(m_SidebarListRenderTarget->GetHwnd());
 	}
-}
-
-D2D1_SIZE_F GetCursorSize()
-{
-	// We essentially just look for the first transparent pixel on a cursor bitmap to determine its size
-	D2D1_SIZE_F size;
-	int i, j, n, width, height;
-
-	ICONINFO ii;
-	BITMAP bitmap;
-	GetIconInfo((HICON)GetCursor(), &ii);
-	GetObject(ii.hbmMask, sizeof(BITMAP), &bitmap);
-	width = bitmap.bmWidth;
-	if (ii.hbmColor == NULL)
-		height = bitmap.bmHeight / 2;
-	else
-		height = bitmap.bmHeight;
-
-	HDC dc = CreateCompatibleDC(GetDC(hDialog));
-	SelectObject(dc, ii.hbmMask);
-	for (i = 0, n = 0; i < width; i++)
-		for (j = 0; j < height; j++)
-			if (GetPixel(dc, i, j) != RGB(255, 255, 255))
-				if (n < j)
-					n = j;
-
-	DeleteDC(dc);
-	DeleteObject(ii.hbmColor);
-	DeleteObject(ii.hbmMask);
-	size.height = static_cast<FLOAT>(n - ii.yHotspot);
-	size.width = size.height;
-	return size;
 }
 
 void MapDialog::RenderTextWithShadow(const ComPtr<ID2D1HwndRenderTarget>& RenderTarget, const D2D1_POINT_2F Pos, const ComPtr<IDWriteTextLayout>& TextLayout, const ComPtr<ID2D1SolidColorBrush>& Brush, const D2D1_COLOR_F Color, const FLOAT offset)
@@ -777,7 +908,7 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 		return S_FALSE;
 
 	// Create render target if not yet created
-	hr = CreateDeviceResources();
+	hr = CreateDeviceResources().first;
 
 	if (SUCCEEDED(hr) && !(m_MapRenderTarget->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED))
 	{
@@ -789,9 +920,9 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 		{
 			m_MapRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 			ComPtr<IDWriteTextLayout> TextLayout;
-			static const std::wstring str = IsWindows8OrGreater() ? GLOB_STRS[61].c_str() : GLOB_STRS[62].c_str();
-			DWRITE_TEXT_RANGE range = { 0, str.size() };
-			m_DWriteFactory->CreateTextLayout(str.c_str(), str.size(), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
+			static const std::wstring str = GLOB_STRS[61].c_str();
+			DWRITE_TEXT_RANGE range = { 0, static_cast<uint32_t>(str.size()) };
+			m_DWriteFactory->CreateTextLayout(str.c_str(), static_cast<uint32_t>(str.size()), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
 			TextLayout->SetFontSize(42.f, range);
 			TextLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 			TextLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -880,7 +1011,7 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 				}
 				MarkerNames.resize(MarkerNames.size() - 1);
 				ComPtr<IDWriteTextLayout> TextLayout;
-				m_DWriteFactory->CreateTextLayout(MarkerNames.c_str(), MarkerNames.size(), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
+				m_DWriteFactory->CreateTextLayout(MarkerNames.c_str(), static_cast<uint32_t>(MarkerNames.size()), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
 
 				DWRITE_TEXT_METRICS TextMetrics = { 0 };
 				TextLayout->GetMetrics(&TextMetrics);
@@ -930,7 +1061,7 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 					std::wstring NodeText(64, '\0');
 					NodeText.resize(swprintf(&NodeText[0], 64, L"%.2fm", TotalDistance));
 					ComPtr<IDWriteTextLayout> TextLayout;
-					m_DWriteFactory->CreateTextLayout(NodeText.c_str(), NodeText.size(), m_MonospaceTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
+					m_DWriteFactory->CreateTextLayout(NodeText.c_str(), static_cast<uint32_t>(NodeText.size()), m_MonospaceTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
 					DWRITE_TEXT_METRICS TextMetrics = { 0 };
 					TextLayout->GetMetrics(&TextMetrics);
 					FLOAT TextWidth = ceil(TextMetrics.width + BorderSizeDouble), TextHeight = ceil(TextMetrics.height + BorderSizeDouble);
@@ -957,8 +1088,8 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 					for (uint32_t x = StartIndexX; x < EndIndexX; x++)
 					{
 						std::wstring HeightStr = std::to_wstring(static_cast<INT>(s_HeightMap[y][x]));
-						DWRITE_TEXT_RANGE Range = { 0 , HeightStr.size() }; 
-						m_DWriteFactory->CreateTextLayout(HeightStr.c_str(), HeightStr.size(), m_ListTextFormat.Get(), TextSize.width, TextSize.height, TextLayout.ReleaseAndGetAddressOf());
+						DWRITE_TEXT_RANGE Range = { 0 , static_cast<uint32_t>(HeightStr.size()) };
+						m_DWriteFactory->CreateTextLayout(HeightStr.c_str(), static_cast<uint32_t>(HeightStr.size()), m_ListTextFormat.Get(), TextSize.width, TextSize.height, TextLayout.ReleaseAndGetAddressOf());
 						TextLayout->SetFontSize(8.f, Range);
 						TextLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 						TextLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -997,7 +1128,7 @@ HRESULT MapDialog::OnSidebarRender(HWND hwnd)
 		return S_FALSE;
 
 	// Create render target if not yet created
-	hr = CreateDeviceResources();
+	hr = CreateDeviceResources().first;
 
 	if (SUCCEEDED(hr) && !(m_SidebarRenderTarget->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED))
 	{
@@ -1011,20 +1142,20 @@ HRESULT MapDialog::OnSidebarRender(HWND hwnd)
 			ComPtr<IDWriteTextLayout> TextLayout;
 			m_SidebarRenderTarget->Clear(s_ColorBackground);
 			static const std::wstring str = L"MY SUMMER CAR MAP";
-			DWRITE_TEXT_RANGE range = { 0 , str.size() }; 
-			m_DWriteFactory->CreateTextLayout(str.c_str(), str.size(), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
+			DWRITE_TEXT_RANGE range = { 0 , static_cast<uint32_t>(str.size()) };
+			m_DWriteFactory->CreateTextLayout(str.c_str(), static_cast<uint32_t>(str.size()), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
 			TextLayout->SetFontSize(22.f, range);
 
 			RenderTextWithShadow(m_SidebarRenderTarget, D2D1::Point2F(ContentPadding, ContentPadding), TextLayout, m_SidebarSceneBrush, D2D1::ColorF(D2D1::ColorF::White), 2.f);
 			m_SidebarRenderTarget->DrawRectangle(&D2D1::RectF(BorderPadding, BorderPadding, rtSize.width - BorderPadding, 52.f + BorderPadding), m_SidebarSceneBrush.Get(), 3.f);
 
 			m_SidebarRenderTarget->SetTransform(D2D1::Matrix3x2F::Translation(0, static_cast<FLOAT>(64.f)));
-			m_DWriteFactory->CreateTextLayout(GLOB_STRS[53].c_str(), GLOB_STRS[53].size(), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
+			m_DWriteFactory->CreateTextLayout(GLOB_STRS[53].c_str(), static_cast<uint32_t>(GLOB_STRS[53].size()), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
 			RenderTextWithShadow(m_SidebarRenderTarget, D2D1::Point2F(ContentPadding, ContentPadding), TextLayout, m_SidebarSceneBrush, D2D1::ColorF(D2D1::ColorF::White));
 			m_SidebarRenderTarget->DrawRectangle(&D2D1::RectF(BorderPadding, BorderPadding, rtSize.width - BorderPadding, 66.f + BorderPadding), m_SidebarSceneBrush.Get(), 3.f);
 
 			m_SidebarRenderTarget->SetTransform(D2D1::Matrix3x2F::Translation(0, static_cast<FLOAT>(142.f)));
-			m_DWriteFactory->CreateTextLayout(GLOB_STRS[54].c_str(), GLOB_STRS[54].size(), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
+			m_DWriteFactory->CreateTextLayout(GLOB_STRS[54].c_str(), static_cast<uint32_t>(GLOB_STRS[54].size()), m_ListTextFormat.Get(), rtSize.width - ContentPadding, rtSize.height - ContentPadding, TextLayout.ReleaseAndGetAddressOf());
 			RenderTextWithShadow(m_SidebarRenderTarget, D2D1::Point2F(ContentPadding + 10.f, ContentPadding + 5.f), TextLayout, m_SidebarSceneBrush, D2D1::ColorF(D2D1::ColorF::White));
 			m_SidebarRenderTarget->DrawRectangle(&D2D1::RectF(BorderPadding, BorderPadding, rtSize.width - BorderPadding, rtSize.height - BorderPadding - 142.f), m_SidebarSceneBrush.Get(), 3.f);
 		}
@@ -1054,7 +1185,7 @@ HRESULT MapDialog::OnSidebarListRender(HWND hwnd)
 		return S_FALSE;
 
 	// Create render target if not yet created
-	hr = CreateDeviceResources();
+	hr = CreateDeviceResources().first;
 
 	if (SUCCEEDED(hr) && !(m_SidebarListRenderTarget->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED))
 	{
@@ -1085,7 +1216,7 @@ HRESULT MapDialog::OnSidebarListRender(HWND hwnd)
 			std::transform(key.begin(), key.end(), key.begin(), ::toupper);
 			
 			ComPtr<IDWriteTextLayout> TextLayout;
-			m_DWriteFactory->CreateTextLayout(key.c_str(), key.size(), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
+			m_DWriteFactory->CreateTextLayout(key.c_str(), static_cast<uint32_t>(key.size()), m_ListTextFormat.Get(), rtSize.width, rtSize.height, TextLayout.ReleaseAndGetAddressOf());
 			TextLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 			RenderTextWithShadow(m_SidebarListRenderTarget, D2D1::Point2F(xOffset, yOffset), TextLayout, m_SidebarListSceneBrush, bActive ? s_ColorHighlights : s_ColorShadows);
 		}
@@ -1116,7 +1247,7 @@ HRESULT MapDialog::OnSidebarInfoRender(HWND hwnd)
 		return S_FALSE;
 
 	// Create render target if not yet created
-	hr = CreateDeviceResources();
+	hr = CreateDeviceResources().first;
 
 	if (SUCCEEDED(hr) && !(m_SidebarInfoRenderTarget->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED))
 	{
@@ -1133,12 +1264,11 @@ HRESULT MapDialog::OnSidebarInfoRender(HWND hwnd)
 			std::wstring coords(64, '\0');
 			const D2D_VECTOR_3F WorldMousePos = RemapMapCursorPosToWorldPos();
 			coords.resize(swprintf(&coords[0], 64, L"x: %7.1f y: %5.1f z: %7.1f", WorldMousePos.x, WorldMousePos.y, WorldMousePos.z));
-			m_DWriteFactory->CreateTextLayout(coords.c_str(), coords.size(), m_MonospaceTextFormat.Get(), rtSize.width - BorderPadding, rtSize.height - BorderPadding, TextLayout.ReleaseAndGetAddressOf());
-			DWRITE_TEXT_RANGE range = { 0 , coords.size() };
+			m_DWriteFactory->CreateTextLayout(coords.c_str(), static_cast<uint32_t>(coords.size()), m_MonospaceTextFormat.Get(), rtSize.width - BorderPadding, rtSize.height - BorderPadding, TextLayout.ReleaseAndGetAddressOf());
+			DWRITE_TEXT_RANGE range = { 0 , static_cast<uint32_t>(coords.size()) };
 			TextLayout->SetFontSize(13.f, range);
 			RenderTextWithShadow(m_SidebarInfoRenderTarget, D2D1::Point2F(ContentPadding, 0), TextLayout, m_SidebarInfoSceneBrush, D2D1::ColorF(D2D1::ColorF::White));
 		}
-
 		hr = m_SidebarInfoRenderTarget->EndDraw();
 
 		// In case of device loss, discard D2D render target and D2DBitmap
@@ -1262,20 +1392,23 @@ D2D1_POINT_2F MapDialog::GetSidebarItemLocation(const SidebarListEntry* entry) c
 	case SidebarListEntry::Landmark:
 		bin = locations[entry->m_Index].second; break;
 	case SidebarListEntry::Carpart:
-		bin = variables[EntryExists(carparts[entry->m_Index].name)].value; break;
+		if (m_SatsumaTransformIndex != UINT_MAX)
+		{
+			UINT iInstalled = carparts[entry->m_Index].iInstalled;
+			UINT iCorner = carparts[entry->m_Index].iCorner;
+
+			if (iInstalled != UINT_MAX && variables[iInstalled].value[0])
+				bin = variables[m_SatsumaTransformIndex].value;
+			else if (iCorner != UINT_MAX && !variables[iCorner].value.empty())
+				bin = variables[m_SatsumaTransformIndex].value;
+			else
+				bin = variables[EntryExists(carparts[entry->m_Index].name)].value;
+		}
+		break;
 	case SidebarListEntry::Misc:
 		bin = m_SidebarAssortedItems[entry->m_Index]->value; break;
 	}
 	return ToRelativePos(RemapWorldPosToMapPos(&MapDialog::GetItemLocation(bin)), m_MapRenderTarget->GetSize());
-}
-
-FLOAT lerp(FLOAT s, FLOAT e, FLOAT t)
-{ 
-	return s + (e - s)*t; 
-}
-FLOAT blerp(FLOAT c00, FLOAT c10, FLOAT c01, FLOAT c11, FLOAT tx, FLOAT ty)
-{
-	return lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty);
 }
 
 FLOAT MapDialog::GetHeightAtRelMapPos(const D2D1_POINT_2F* MapPos) const
@@ -1295,11 +1428,6 @@ D2D_VECTOR_3F MapDialog::RemapMapCursorPosToWorldPos() const
 	const D2D1_POINT_2F WorldMousePos = RemapMapPosToWorldPos(&MousePos);
 	D2D_VECTOR_3F ret = { WorldMousePos.x, GetHeightAtRelMapPos(&ToRelativePos(MousePos, m_MapRenderTarget->GetSize())), WorldMousePos.y };
 	return ret;
-}
-
-FLOAT GetDistanceBetweenTwoPoints(const D2D1_POINT_2F* p1, const D2D1_POINT_2F* p2)
-{
-	return sqrt(((p2->x - p1->x) * (p2->x - p1->x)) + ((p2->y - p1->y) * (p2->y - p1->y)));
 }
 
 FLOAT MapDialog::GetWorldDistanceBetweenTwoMapPoints(const D2D1_POINT_2F* MapPos1, const D2D1_POINT_2F* MapPos2) const

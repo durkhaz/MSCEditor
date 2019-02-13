@@ -3,14 +3,14 @@
 #include "map.h"
 #endif /*_MAP*/
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
 	hInst = hInstance;
 	ResizeDialogInitialize(hInst);
-	return DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc, (LPARAM)lpCmdLine);
+	return static_cast<int>(DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_MAIN), NULL, DlgProc, (LPARAM)pCmdLine));
 } 
 
-BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	ResizeDialogProc(hwnd, Message, wParam, lParam, &pResizeState);
 	switch (Message)
@@ -79,8 +79,8 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List), LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_BORDERSELECT);
 			ListView_SetExtendedListViewStyle(GetDlgItem(hwnd, IDC_List2), LVS_EX_GRIDLINES);
 			
-			DefaultListCtrlProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List2), GWL_WNDPROC, (LONG)ListCtrlProc);
-			DefaultListViewProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List), GWL_WNDPROC, (LONG)ListViewProc);
+			DefaultListCtrlProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List2), GWLP_WNDPROC, (LONG_PTR)ListCtrlProc);
+			DefaultListViewProc = (WNDPROC)SetWindowLongPtr(GetDlgItem(hwnd, IDC_List), GWLP_WNDPROC, (LONG_PTR)ListViewProc);
 
 			// Set Icon and title
 			HICON hicon = static_cast<HICON>(LoadImage(hInst, MAKEINTRESOURCE(IDI_ICON1), IMAGE_ICON, 0, 0, LR_DEFAULTCOLOR | LR_SHARED | LR_DEFAULTSIZE));
@@ -149,10 +149,10 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 #endif /*_MAP*/
 			// If we got a path from the command line, try to open
 			// Make sure this is at the end of InitDialog because it contains breaks
-			std::wstring InitFile = StringToWString(std::string((LPSTR)lParam));
+			std::wstring InitFile = std::wstring((LPWSTR)lParam);
 			if (!InitFile.empty())
 			{
-				uint32_t found = InitFile.find_last_of('\\');
+				size_t found = InitFile.find_last_of('\\');
 				if (found != std::string::npos)
 				{
 					// Check if we have an actual file at our hands
@@ -186,7 +186,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 						break;
 					case CDDS_ITEMPREPAINT:
 					{
-						int index = lplvcd->nmcd.dwItemSpec > indextable.size() - 1 ? indextable.size() - 1 : lplvcd->nmcd.dwItemSpec;
+						size_t index = lplvcd->nmcd.dwItemSpec > indextable.size() - 1 ? indextable.size() - 1 : lplvcd->nmcd.dwItemSpec;
 						if (variables[indextable[index].second].IsRemoved())
 						lplvcd->clrText = RGB(128, 128, 128);
 						else if (variables[indextable[index].second].IsModified() || variables[indextable[index].second].IsAdded())
@@ -210,21 +210,22 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 						result = CDRF_NOTIFYITEMDRAW;
 						break;
 					case CDDS_ITEMPREPAINT:
-
+					{
 						LVITEM lvi;
 						lvi.mask = LVIF_PARAM;
-						lvi.iItem = lplvcd->nmcd.dwItemSpec;
+						lvi.iItem = static_cast<int>(lplvcd->nmcd.dwItemSpec);
 						lvi.iSubItem = 0;
 						ListView_GetItem(GetDlgItem(hwnd, IDC_List), (LPARAM)&lvi);
 
 						ListParam* listparam = (ListParam*)lvi.lParam;
 						if (listparam->GetFlag(VAR_REMOVED))
 							lplvcd->clrText = RGB(128, 128, 128);
-						else if (listparam->GetFlag(VAR_MODIFIED)) 
+						else if (listparam->GetFlag(VAR_MODIFIED))
 							lplvcd->clrText = RGB(255, 0, 0);
 
 						result = CDRF_NEWFONT;
 						break;
+					}
 				}
 				SetWindowLongPtr(hDialog, DWLP_MSGRESULT, result);
 				return TRUE;
@@ -257,7 +258,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 
 						lvi.mask = LVIF_TEXT | LVIF_STATE; lvi.state = 0; lvi.stateMask = 0;
 						lvi.iItem = item; lvi.iSubItem = 0; lvi.pszText = (LPWSTR)value.c_str();
-						int uindex = SendMessage(hList2, LVM_INSERTITEM, 0, (LPARAM)&lvi);
+						auto uindex = static_cast<int32_t>(SendMessage(hList2, LVM_INSERTITEM, 0, (LPARAM)&lvi));
 
 						indextable.push_back(std::pair<uint32_t, uint32_t>(uindex, i));
 
@@ -316,7 +317,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 					if (steampath.empty()) break;
 					std::wstring gamepath = L"\\steamapps\\common\\My Summer Car\\mysummercar.exe";
 					//try default path
-					if ((int)ShellExecute(NULL, _T("open"), (steampath + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT) > 32) break;
+					if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, _T("open"), (steampath + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT)) > 32) break;
 
 					//user is a fancypants and stores library on a different drive. Read configfile
 					steampath += L"\\config\\config.vdf";
@@ -337,7 +338,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 							wstring key = strInput.substr(startpos, endpos - startpos);
 							if (ContainsStr(key, L"BaseInstallFolder"))
 							{
-								uint32_t _i = endpos + 1;
+								size_t _i = endpos + 1;
 
 								if (FetchDataFileParameters(strInput.substr(_i), startpos, endpos) == 0)
 								{
@@ -350,7 +351,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 						
 					for (uint32_t i = 0; i < basefolders.size(); ++i)
 					{
-						if ((int)ShellExecute(NULL, _T("open"), (basefolders[i] + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT) > 32) break;
+						if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, _T("open"), (basefolders[i] + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT)) > 32) break;
 					}
 					break;
 				}
@@ -383,7 +384,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 				case ID_OPTIONS_DISPLAYRAWNAMES:
 				{
 					bDisplayRawNames = MF_CHECKED != (bDisplayRawNames ? CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_UNCHECKED) : CheckMenuItem(GetSubMenu(GetMenu(hDialog), 2), GetMenuItemID(GetSubMenu(GetMenu(hDialog), 2), 3), MF_CHECKED));
-					int index = SendMessage(GetDlgItem(hwnd, IDC_List), LVM_GETSELECTIONMARK, 0, 0);
+					auto index = static_cast<int32_t>(SendMessage(GetDlgItem(hwnd, IDC_List), LVM_GETSELECTIONMARK, 0, 0));
 					if (index < 0)
 						break;
 					NMHDR nmhdr = { GetDlgItem(hwnd, IDC_List), IDC_List, LVN_ITEMCHANGED };
@@ -518,9 +519,7 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 #ifdef _MAP
 				case ID_TOOLS_WORLDMAP:
 				{
-
-					if (!EditorMap)
-						EditorMap = new MapDialog();
+					OpenMap();
 					break;
 				}
 #endif /*_MAP*/
@@ -550,18 +549,18 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 			{
 				SetBkMode((HDC)wParam, COLOR_WINDOW);
 				WasModified() ? SetTextColor((HDC)wParam, RGB(255, 0, 0)): SetTextColor((HDC)wParam, RGB(0, 0, 0));
-				return (BOOL)GetSysColorBrush(COLOR_WINDOW);
+				return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
 			}
 			else if ((HWND)lParam == GetDlgItem(hDialog, IDC_OUTPUT4))
 			{
 				SetBkMode((HDC)wParam, COLOR_WINDOW);
 				SetTextColor((HDC)wParam, RGB(255, 0, 0));
-				return (BOOL)GetSysColorBrush(COLOR_WINDOW);
+				return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
 			}
 			else
 			{
 				SetBkMode((HDC)wParam, COLOR_WINDOW);
-				return (BOOL)GetSysColorBrush(COLOR_WINDOW);
+				return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
 			}
 			break;
 
@@ -587,8 +586,9 @@ BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 #endif /*_MAP*/
 
 				EndDialog(hDialog, 0);
+				return FALSE;
 			}
-			break;
+			
 
 		default:
 			return FALSE;

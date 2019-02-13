@@ -37,18 +37,6 @@
 #include "resize.h"
 
 //
-//  For older 32-bit compilers, we won't have 64-bit support.  Use the 32-bit
-//  variants; lack of 64-bit support doesn't matter when we're targetting
-//  32-bit.
-//
-
-#ifndef SetWindowLongPtrPtr
-#define LONG_PTR LONG
-#define SetWindowLongPtrPtr( HWND, INDEX, DATA ) SetWindowLongPtr( HWND, INDEX, DATA )
-//#define GetWindowLongPtr( HWND, INDEX ) GetWindowLong( HWND, INDEX )
-#endif
-
-//
 //  This is the only window message defined by our resize dialog control class,
 //  and it's fully internal.  We send this to each resize control to take care
 //  of its buddy.
@@ -91,7 +79,7 @@ typedef struct _RESIZE_DIALOG_DATA_CREATION_INFO {
 	USHORT SizeOfData;
 	USHORT MaximumWidthPercent;
 	USHORT MaximumHeightPercent;
-} RESIZE_DIALOG_DATA_CREATION_INFO, UNALIGNED *PRESIZE_DIALOG_DATA_CREATION_INFO;
+} RESIZE_DIALOG_DATA_CREATION_INFO, *PRESIZE_DIALOG_DATA_CREATION_INFO;
 #pragma pack( pop )
 
 //
@@ -130,7 +118,7 @@ typedef struct _RESIZE_DIALOG_CONTROL_WINDOW_EXTRA {
 typedef struct _RESIZE_DIALOG_CONTROL_CREATION_INFO {
 	USHORT SizeOfData;
 	SMALL_RECT AdjustmentToBuddyRect;
-} RESIZE_DIALOG_CONTROL_CREATION_INFO, UNALIGNED *PRESIZE_DIALOG_CONTROL_CREATION_INFO;
+} RESIZE_DIALOG_CONTROL_CREATION_INFO, *PRESIZE_DIALOG_CONTROL_CREATION_INFO;
 #pragma pack( pop )
 
 BOOL CALLBACK
@@ -144,7 +132,7 @@ FindMetadataFromChildren( HWND hChildWnd, LPARAM lParam );
 //  performs dialog-level operations.
 //
 
-BOOL CALLBACK
+INT_PTR CALLBACK
 ResizeDialogProc(HWND hDlg, uint32_t uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage)
 {
 	PRESIZE_DIALOG_INFO DialogInfo;
@@ -415,7 +403,7 @@ ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lPara
 				ExtraData->MaximumHeightPercent = 100;
 			}
 
-			SetWindowLongPtrPtr( hWnd, 0, (LONG_PTR)ExtraData );
+			SetWindowLongPtr( hWnd, 0, (LONG_PTR)ExtraData );
 			break;
 		}
 
@@ -428,7 +416,7 @@ ResizeDialogDataWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lPara
 
 			ExtraData = (PRESIZE_DIALOG_DATA_WINDOW_EXTRA)GetWindowLongPtr( hWnd, 0 );
 			if (ExtraData != NULL) {
-				SetWindowLongPtrPtr( hWnd, 0, 0 );
+				SetWindowLongPtr( hWnd, 0, 0 );
 				free( ExtraData );
 			}
 			break;
@@ -562,7 +550,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 				ExtraData->AdjustmentToBuddyRect.Bottom = 0;
 			}
 
-			SetWindowLongPtrPtr( hWnd, 0, (LONG_PTR)ExtraData );
+			SetWindowLongPtr( hWnd, 0, (LONG_PTR)ExtraData );
 			break;
 		}
 
@@ -575,7 +563,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 
 			ExtraData = (PRESIZE_DIALOG_CONTROL_WINDOW_EXTRA)GetWindowLongPtr( hWnd, 0 );
 			if (ExtraData != NULL) {
-				SetWindowLongPtrPtr( hWnd, 0, 0 );
+				SetWindowLongPtr( hWnd, 0, 0 );
 				free( ExtraData );
 			}
 			break;
@@ -719,7 +707,7 @@ ResizeDialogControlWindowProc(HWND hWnd, uint32_t uMsg, WPARAM wParam, LPARAM lP
 }
 
 
-BOOL
+INT_PTR
 ResizeDialogInitialize( HINSTANCE hInst )
 {
 	WNDCLASSW ResizeDialogClassW;

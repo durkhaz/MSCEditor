@@ -157,7 +157,7 @@ std::string Variable::MakeEntry() const
 {
 	std::string body = header.GetBinary() + value + std::string(1, HX_ENDENTRY);
 	std::string id = WStrToBinStr(raw_key);
-	return std::string(1, HX_STARTENTRY) + id + IntToBin(body.size()) + body;
+	return std::string(1, HX_STARTENTRY) + id + IntToBin(static_cast<int32_t>(body.size())) + body;
 }
 
 bool Variable::IsModified() const

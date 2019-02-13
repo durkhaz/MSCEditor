@@ -9,14 +9,14 @@
 
 using Microsoft::WRL::ComPtr;
 
-BOOL MapDialog::OnSidebarMouseWheel(WPARAM wParam, LPARAM lParam)
+INT_PTR MapDialog::OnSidebarMouseWheel(WPARAM wParam, LPARAM lParam)
 {
 	m_SidebarListCurrentScrollpos -= GET_WHEEL_DELTA_WPARAM(wParam);
 	m_SidebarListCurrentScrollpos = max(0, min(m_SidebarListCurrentScrollpos, static_cast<INT>(m_SidebarListScrollRange) - static_cast<INT>(m_SidebarListRenderTarget->GetSize().height)));
 
 	SCROLLINFO si = { 0 };
 	si.fMask = SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS;
-	BOOL ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
+	INT_PTR ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
 
 	if (m_SidebarListCurrentScrollpos != si.nPos)
 	{
@@ -27,7 +27,7 @@ BOOL MapDialog::OnSidebarMouseWheel(WPARAM wParam, LPARAM lParam)
 	return FALSE;
 }
 
-BOOL MapDialog::OnSidebarVScroll(WPARAM wParam, LPARAM lParam)
+INT_PTR MapDialog::OnSidebarVScroll(WPARAM wParam, LPARAM lParam)
 {
 	INT newScrollPos = m_SidebarListCurrentScrollpos;
 
@@ -53,7 +53,7 @@ BOOL MapDialog::OnSidebarVScroll(WPARAM wParam, LPARAM lParam)
 	{
 		SCROLLINFO si = { 0 };
 		si.fMask = SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS;
-		BOOL ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
+		INT_PTR ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
 		newScrollPos = si.nTrackPos;
 		break;
 	}
@@ -67,7 +67,7 @@ BOOL MapDialog::OnSidebarVScroll(WPARAM wParam, LPARAM lParam)
 
 	SCROLLINFO si = { 0 };
 	si.fMask = SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS;
-	BOOL ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
+	INT_PTR ret = GetScrollInfo(m_hDialogSidebarList, SB_VERT, &si);
 	if (!ret)
 		return TRUE;
 
@@ -97,7 +97,7 @@ void MapDialog::SidebarToggleCategory(uint32_t type)
 	m_SidebarListCurrentScrollpos = max(0, min(m_SidebarListCurrentScrollpos, m_SidebarListScrollRange - static_cast<INT>(m_SidebarListRenderTarget->GetSize().height)));
 }
 
-BOOL MapDialog::OnSidebarLButtondown(WPARAM wParam, LPARAM lParam)
+INT_PTR MapDialog::OnSidebarLButtondown(WPARAM wParam, LPARAM lParam)
 {
 	D2D1_POINT_2F p;
 	p.x = static_cast<FLOAT>(GET_X_LPARAM(lParam));
@@ -161,7 +161,7 @@ bool MapDialog::OnSidebarPaint(HWND hwnd, bool bDrawSidebarCoordsOnly)
 	return !bSucc;
 }
 
-BOOL CALLBACK MapDialog::SidebarInfoProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MapDialog::SidebarInfoProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static MapDialog* map = nullptr;
 	switch (Message)
@@ -173,14 +173,18 @@ BOOL CALLBACK MapDialog::SidebarInfoProc(HWND hwnd, uint32_t Message, WPARAM wPa
 	}
 	case WM_PAINT:
 	case WM_DISPLAYCHANGE:
-		return map->OnSidebarInfoRender(hwnd);
+		if (map->m_D2DFactory)
+			return map->OnSidebarInfoRender(hwnd);
+	case WM_DESTROY:
+		map = nullptr;
+		return FALSE;
 	default:
 		return FALSE;
 	}
 	return TRUE;
 }
 
-BOOL CALLBACK MapDialog::SidebarListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MapDialog::SidebarListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static MapDialog* map = nullptr;
 	switch (Message)
@@ -196,13 +200,16 @@ BOOL CALLBACK MapDialog::SidebarListProc(HWND hwnd, uint32_t Message, WPARAM wPa
 		return map->OnSidebarMouseWheel(wParam, lParam);
 	case WM_LBUTTONDOWN:
 		return map->OnSidebarLButtondown(wParam, lParam);
+	case WM_DESTROY:
+		map = nullptr;
+		return FALSE;
 	default:
 		return FALSE;
 	}
 	return TRUE;
 }
 
-BOOL CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static HBRUSH backgroundBrush;
 	static MapDialog* map = nullptr;
@@ -216,7 +223,8 @@ BOOL CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam,
 	}
 	case WM_PAINT:
 	case WM_DISPLAYCHANGE: 
-		return map->OnSidebarPaint(hwnd, map);
+		if (map->m_D2DFactory)
+			return map->OnSidebarPaint(hwnd, map);
 	case WM_CTLCOLORSTATIC:
 	case WM_CTLCOLORBTN:
 		return (LRESULT)backgroundBrush;
@@ -245,6 +253,7 @@ BOOL CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam,
 					}
 				map->OnSidebarListRender(map->m_SidebarListRenderTarget->GetHwnd());
 				map->OnMapRender(map->m_MapRenderTarget->GetHwnd());
+				SendMessage(map->m_hwnd, WM_NEXTDLGCTL, (WPARAM)map->m_MapRenderTarget->GetHwnd(), TRUE);
 				break;
 			}
 		}
@@ -254,7 +263,8 @@ BOOL CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam,
 	case WM_DESTROY:
 	{
 		DeleteObject(backgroundBrush);
-		break;
+		map = nullptr;
+		return FALSE;
 	}
 	default:
 		return FALSE;
@@ -262,7 +272,7 @@ BOOL CALLBACK MapDialog::SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam,
 	return TRUE;
 }
 
-BOOL CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static MapDialog* map = nullptr;
 	switch (Message)
@@ -274,7 +284,8 @@ BOOL CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 	}
 	case WM_PAINT:
 	case WM_DISPLAYCHANGE:
-		return SUCCEEDED(map->OnMapRender(hwnd)) ? FALSE : TRUE;
+		if (map->m_D2DFactory)
+			return SUCCEEDED(map->OnMapRender(hwnd)) ? FALSE : TRUE;
 	case WM_RBUTTONDOWN:
 	{
 		RECT rekt;
@@ -427,7 +438,6 @@ BOOL CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 
 		map->m_MapZoom += delta;
 		map->OnMapRender(hwnd);
-		LOG(L"Zoom: " + std::to_wstring(map->m_MapZoom) + L"\n");
 		return FALSE;
 	}
 	case WM_MAPCONTEXTMENU:
@@ -443,7 +453,7 @@ BOOL CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 			InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING, ID_MAP_CLEAR_MEASURE, GLOB_STRS[60].c_str());
 		}
 
-		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, lParam, wParam, hwnd, NULL);
+		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, static_cast<int32_t>(lParam), static_cast<int32_t>(wParam), hwnd, NULL);
 		DestroyMenu(hPopupMenu);
 		break;
 	}
@@ -504,13 +514,16 @@ BOOL CALLBACK MapDialog::MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 		}
 		break;
 	}
+	case WM_DESTROY:
+		map = nullptr;
+		return FALSE;
 	default:
 		return FALSE;
 	}
 	return TRUE;
 }
 
-BOOL CALLBACK MapDialog::MainProc(HWND hwnd, unsigned int Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MapDialog::MainProc(HWND hwnd, unsigned int Message, WPARAM wParam, LPARAM lParam)
 {
 	static MapDialog* map = nullptr;
 
@@ -561,20 +574,20 @@ BOOL CALLBACK MapDialog::MainProc(HWND hwnd, unsigned int Message, WPARAM wParam
 			map->m_hDialogMap = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_BLANKMAP), hwnd, MapProc, reinterpret_cast<LPARAM>(map));
 			SetWindowPos(map->m_hDialogMap, NULL, 0, 0, rekt.right - s_MapSidebarWidth, rekt.bottom, SWP_SHOWWINDOW);
 
-			if (SUCCEEDED(map->CreateDeviceIndependentResources()))
+			HERROR hr = map->CreateDeviceIndependentResources();
+			if (SUCCEEDED(hr.first))
 			{
 				InvalidateRect(hwnd, NULL, TRUE);
 				LOG(L"Map : Instantiation successful!\n");
 				break;
 			}
 			LOG(L"Map : Instantiation failed!\n");
+			std::wstring hrstr(64, '\0');
+			HRToStr(hr.first, hrstr);
+			std::wstring bla = StringToWString(hr.second);
+			hrstr += bla;
+			throw hrstr;
 		}
-		// Leak into WM_CLOSE
-	}
-	case WM_CLOSE:
-	{
-		DestroyWindow(hwnd);
-		break;
 	}
 	case WM_GETMINMAXINFO:
 	{
@@ -612,11 +625,19 @@ BOOL CALLBACK MapDialog::MainProc(HWND hwnd, unsigned int Message, WPARAM wParam
 		UpdateWindow(hwnd);
 		return FALSE;
 	}
+	case WM_CLOSE:
+		if (EditorMap)
+			DestroyWindow(map->m_hwnd);
+		return FALSE;
 	case WM_DESTROY:
 	{
 		ClipCursor(NULL);
-		delete map;
-		break;
+		if (EditorMap)
+		{
+			delete map;
+			map = nullptr;
+		}
+		return FALSE;
 	}
 	default:
 		return FALSE;

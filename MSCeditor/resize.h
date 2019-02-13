@@ -21,10 +21,10 @@
 
 #ifndef RC_INVOKED
 
-BOOL CALLBACK
+INT_PTR CALLBACK
 ResizeDialogProc(HWND hDlg, uint32_t uMsg, WPARAM wParam, LPARAM lParam, PVOID * ppStorage);
 
-BOOL
+INT_PTR
 ResizeDialogInitialize(HINSTANCE hInst);
 
 #else

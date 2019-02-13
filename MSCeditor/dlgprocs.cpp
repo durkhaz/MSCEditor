@@ -39,14 +39,14 @@ DLGTEMPLATEEX* DoLockDlgRes(LPCTSTR lpszResName)
 	return (DLGTEMPLATEEX *)LockResource(hglb);
 }
 
-void AllocWindowUserData(HWND hwnd, LONG DefProc, uint32_t id = 0, COLORREF clr = RGB(255, 255, 255), uint32_t dat = 0)
+void AllocWindowUserData(HWND hwnd, LONG_PTR DefProc, uint32_t id = 0, COLORREF clr = RGB(255, 255, 255), uint32_t dat = 0)
 {
 	PLID *plID = (PLID *)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, sizeof(PLID));
-	plID->hDefProc = (WNDPROC)SetWindowLongPtr(hwnd, GWL_WNDPROC, DefProc);
+	plID->hDefProc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, DefProc);
 	plID->cColor = clr;
 	plID->nPID = id;
 	plID->dat = dat;
-	SetWindowLongPtr(hwnd, GWL_USERDATA, (LONG)plID);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)plID);
 }
 
 inline void ShowBalloontip(HWND hwnd, uint32_t msgIndex)
@@ -70,7 +70,7 @@ inline std::wstring GetEditboxString(HWND hEdit)
 bool CloseEditbox(HWND hwnd, HWND hOutput, bool bIgnoreContent = FALSE)
 {
 	// Setting this to 1 makes sure we won't execute twice. Losing focus on a window triggers twice sometimes for some godforsaken reason
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID)
 		plID->nPID = 1;
 
@@ -201,7 +201,7 @@ void UpdateRow(HWND hwnd, uint32_t pIndex, int nRow, std::wstring str = _T(""))
 	COLORREF labelclr;
 	bool bActionAvailable = GetStateLabelSpecs(&carproperties[pIndex], labeltxt, labelclr);
 	SendMessage(hLabel, WM_SETTEXT, 0, (LPARAM)labeltxt.c_str());
-	PLID *plID = (PLID *)GetWindowLong((HWND)hLabel, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr((HWND)hLabel, GWLP_USERDATA);
 	if (plID != nullptr)
 		plID->cColor = labelclr;
 	ClearStatic(hLabel, hwnd);
@@ -227,7 +227,7 @@ void UpdateRow(HWND hwnd, uint32_t pIndex, int nRow, std::wstring str = _T(""))
 			StaticRekt.bottom -= StaticRekt.top;
 			StaticRekt.right -= StaticRekt.left;
 
-			hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, StaticRekt.left + StaticRekt.right + 16, StaticRekt.top, 20, StaticRekt.bottom, hwnd, (HMENU)(ID_PL_BUTTON + nRow), hInst, NULL);
+			hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, StaticRekt.left + StaticRekt.right + 16, StaticRekt.top, 20, StaticRekt.bottom, hwnd, (HMENU)IntToPtr(ID_PL_BUTTON + nRow), hInst, NULL);
 			SendMessage(hFixButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 		}
 	}
@@ -243,7 +243,7 @@ void UpdateRow(HWND hwnd, uint32_t pIndex, int nRow, std::wstring str = _T(""))
 // dlg procs
 // ======================
 
-BOOL CALLBACK AboutProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK AboutProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -271,7 +271,7 @@ BOOL CALLBACK AboutProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-BOOL CALLBACK HelpProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK HelpProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -318,7 +318,7 @@ BOOL CALLBACK HelpProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam
 	return TRUE;
 }
 
-BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static const std::vector<std::wstring> weathertypes = { L"Clear Sky", L"Overcast", L"Rainy", L"Thunderstorm" };
 	static const std::wstring worldtime =		L"worldtime";
@@ -441,22 +441,22 @@ BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM
 		{
 			// Time
 			{
-				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TTIME), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				auto sel = static_cast<int32_t>(SendMessage(GetDlgItem(hwnd, IDC_TTIME), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0));
 				if (sel != CB_ERR)
 				{
-					int time = (sel + 1) * 2 - 2;
+					int32_t time = (sel + 1) * 2 - 2;
 					UpdateValue(L"", EntryExists(worldtime), IntToBin(time = 0 ? 24 : time));
 				}
 			}
 			// Day
 			{
-				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TDAY), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				auto sel = static_cast<int32_t>(SendMessage(GetDlgItem(hwnd, IDC_TDAY), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0));
 				if (sel != CB_ERR)
 					UpdateValue(L"", EntryExists(worldday), IntToBin(sel + 1));
 			}
 			// Weather
 			{
-				auto sel = SendMessage(GetDlgItem(hwnd, IDC_TWEATHER), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0); // 0: clear, 1: overcast, 2: rainy, 3: thunderstorm
+				auto sel = static_cast<int32_t>(SendMessage(GetDlgItem(hwnd, IDC_TWEATHER), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0)); // 0: clear, 1: overcast, 2: rainy, 3: thunderstorm
 
 				// Clear Sky
 				if (sel == 0) 
@@ -505,7 +505,7 @@ BOOL CALLBACK TimeWeatherProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM
 	return TRUE;
 }
 
-BOOL ReportBoltsProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR ReportBoltsProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -644,24 +644,24 @@ BOOL ReportBoltsProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 // Some controls inside the property list allocated some data on the heap, so we need to clean it up upon destroying
 LRESULT CALLBACK PropertyListControlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID == nullptr)
 		return FALSE; 
 
 	else if (message == WM_DESTROY)
 	{
+		SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(plID->hDefProc));
 		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-		plID = nullptr;
-		return TRUE;
+		return FALSE;
 	}
 	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
 }
 
-BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static int s_scrollYdelta = 0;
 	static HBRUSH s_backgroundBrush;
-	static uint32_t initial_size;
+	static size_t initial_size;
 
 	switch (Message)
 	{
@@ -702,7 +702,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 			{
 				// To get the index, we take it from the edit static because it's always present
 				HWND hEditValue = GetDlgItem(hwnd, ID_PL_EDIT + (CtrlID - ID_PL_BUTTON));
-				PLID *plID = (PLID *)GetWindowLong(hEditValue, GWL_USERDATA);
+				PLID *plID = (PLID *)GetWindowLongPtr(hEditValue, GWLP_USERDATA);
 				if (plID == nullptr)
 					break;
 
@@ -710,13 +710,13 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 			}
 			else if (CtrlID == IDC_PLSET)
 			{
-				PLID *plID = (PLID *)GetWindowLong(GetDlgItem(hwnd, IDC_PLEDIT), GWL_USERDATA);
+				PLID *plID = (PLID *)GetWindowLongPtr(GetDlgItem(hwnd, IDC_PLEDIT), GWLP_USERDATA);
 				if (plID == nullptr)
 					break;
 				int nRow = plID->nPID;
 
 				// plID->nPID is the row in this case, not the pIndex
-				plID = (PLID *)GetWindowLong(GetDlgItem(hwnd, ID_PL_EDIT + nRow), GWL_USERDATA);
+				plID = (PLID *)GetWindowLongPtr(GetDlgItem(hwnd, ID_PL_EDIT + nRow), GWLP_USERDATA);
 				if (plID == nullptr)
 					break;
 
@@ -755,7 +755,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 	case WM_CTLCOLORDLG:
 	{
 		// Paint background white
-		return (INT_PTR)(s_backgroundBrush);
+		return reinterpret_cast<INT_PTR>(s_backgroundBrush);
 	}
 	case WM_CTLCOLORSTATIC:
 	{
@@ -767,13 +767,12 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 		{
 			HDC hdcStatic = (HDC)wParam;
 
-			PLID *plID = (PLID *)GetWindowLong((HWND)lParam, GWL_USERDATA);
+			PLID *plID = (PLID *)GetWindowLongPtr((HWND)lParam, GWLP_USERDATA);
 			if (plID != nullptr)
 			{
 				SetTextColor(hdcStatic, RGB(255, 255, 255));
-				//SetBkColor(hdcStatic, (COLORREF)GetSysColor(COLOR_WINDOW));
 				SetBkColor(hdcStatic, plID->cColor);
-				return (INT_PTR)(s_backgroundBrush);		// probably obsolete
+				return reinterpret_cast<INT_PTR>(s_backgroundBrush);		// probably obsolete
 			}
 		}
 		// Always return true to avoid gray background
@@ -785,7 +784,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 		GetWindowRect(hwnd, &ScrollRekt);
 		ScrollRekt.bottom -= ScrollRekt.top;
 
-		int windowsize = wParam - ScrollRekt.bottom;
+		auto windowsize = wParam - ScrollRekt.bottom;
 
 		if (windowsize <= 0)
 			ShowScrollBar(hwnd, SB_VERT, FALSE);
@@ -796,7 +795,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 			SecureZeroMemory(&si, sizeof(SCROLLINFO));
 			si.cbSize = sizeof(SCROLLINFO);
 			si.fMask = SIF_ALL;
-			si.nMax = windowsize + pagesize;
+			si.nMax = static_cast<int>(windowsize + pagesize);
 			si.nPage = pagesize;
 			SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 		}
@@ -816,7 +815,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 		if (cID >= ID_PL_EDIT && cID < (ID_PL_EDIT + ID_PL_BASE_OFFSET))
 		{
 			// First we retrieve the index of the property. We just use the fix button for it as it stores the index anyway
-			PLID *plID = (PLID *)GetWindowLong(hClickedWindow, GWL_USERDATA);
+			PLID *plID = (PLID *)GetWindowLongPtr(hClickedWindow, GWLP_USERDATA);
 			int pIndex = plID->nPID;
 
 			// Then we get the dimensions of the window we just clicked on
@@ -836,7 +835,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 			SendMessage(hEditValue, EM_SETLIMITTEXT, 16, 0);
 
 			// Alloc memory on heap to store edit controls property ID and default window process
-			AllocWindowUserData(hEditValue, (LONG)PropertyListControlProc, cID - ID_PL_EDIT /* We don't put the index here, because we can just get the index from the row*/);
+			AllocWindowUserData(hEditValue, (LONG_PTR)PropertyListControlProc, cID - ID_PL_EDIT /* We don't put the index here, because we can just get the index from the row*/);
 
 			// Create apply button
 			HWND hApplyButton = CreateWindowEx(0, WC_BUTTON, _T("set"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, StaticRekt.left + StaticRekt.right + 16, StaticRekt.top, 35, StaticRekt.bottom, hwnd, (HMENU)IDC_PLSET, hInst, NULL);
@@ -854,7 +853,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 		if (carproperties.size() > 0 && initial_size > 0)
 			carproperties.resize(initial_size);
 		DeleteObject(s_backgroundBrush);
-		break;
+		return FALSE;
 	}
 	default:
 		return FALSE;
@@ -862,7 +861,7 @@ BOOL CALLBACK PropertyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARA
 	return TRUE;
 }
 
-BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -889,7 +888,7 @@ BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 			break;
 
 		// Process the carproperty vector
-		uint32_t initial_size = carproperties.size();
+		size_t initial_size = carproperties.size();
 		for (uint32_t i = 0; i < variables.size(); i++)
 		{
 			// Here we set indices of elements read in from the datafile for faster lookup later
@@ -1000,22 +999,22 @@ BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 
 				bActionAvailable = GetStateLabelSpecs(&carproperties[i], value, tColor);
 
-				HWND hDisplayState = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 162, 0 + offset, 40, yChar + 1, hProperties, (HMENU)(ID_PL_STATE + RowID) , hInst, NULL);
+				HWND hDisplayState = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 162, 0 + offset, 40, yChar + 1, hProperties, (HMENU)IntToPtr(ID_PL_STATE + RowID) , hInst, NULL);
 				SendMessage(hDisplayState, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store state's color and default window process
-				AllocWindowUserData(hDisplayState, (LONG)PropertyListControlProc, 0, tColor);
+				AllocWindowUserData(hDisplayState, (LONG_PTR)PropertyListControlProc, 0, tColor);
 
 				value = variables[carproperties[i].index].GetDisplayString();
-				HWND hDisplayValue = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 210, 0 + offset, 100, yChar + 1, hProperties, (HMENU)(ID_PL_EDIT + RowID), hInst, NULL);
+				HWND hDisplayValue = CreateWindowEx(0, WC_STATIC, value.c_str(), SS_SIMPLE | WS_CHILD | WS_VISIBLE, 210, 0 + offset, 100, yChar + 1, hProperties, (HMENU)IntToPtr(ID_PL_EDIT + RowID), hInst, NULL);
 				SendMessage(hDisplayValue, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store DisplayValues property ID and default window process (ID needed by fix button)
-				AllocWindowUserData(hDisplayValue, (LONG)PropertyListControlProc, i, tColor);
+				AllocWindowUserData(hDisplayValue, (LONG_PTR)PropertyListControlProc, i, tColor);
 
 				if (bActionAvailable)
 				{
-					HWND hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 324, 0 + offset - 2, 20, yChar + 1, hProperties, (HMENU)(ID_PL_BUTTON + RowID), hInst, NULL);
+					HWND hFixButton = CreateWindowEx(0, WC_BUTTON, _T("fix"), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 324, 0 + offset - 2, 20, yChar + 1, hProperties, (HMENU)IntToPtr(ID_PL_BUTTON + RowID), hInst, NULL);
 					SendMessage(hFixButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 				}
 				RowID += 1;
@@ -1040,14 +1039,14 @@ BOOL ReportMaintenanceProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 	return TRUE;
 }
 
-BOOL CALLBACK ReportChildrenProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ReportChildrenProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	// Get the index of the selected tab to determine which child proc will be executed
 	HWND hwndParent = GetParent(hwnd);
 	if (hwndParent == NULL)
 		return FALSE;
 
-	DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hwndParent, GWL_USERDATA);
+	DLGHDR *pHdr = (DLGHDR *)GetWindowLongPtr(hwndParent, GWLP_USERDATA);
 	int iSel = TabCtrl_GetCurSel(pHdr->hwndTab);
 
 	// Positions the child dialog box to occupy the display area of the tab control.
@@ -1057,7 +1056,7 @@ BOOL CALLBACK ReportChildrenProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPA
 	return iSel == 0 ? ReportBoltsProc(hwnd, Message, wParam, lParam) : ReportMaintenanceProc(hwnd, Message, wParam, lParam);
 }
 
-BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static std::string TargetLocationBin;
 	static std::vector<uint32_t> vfrom;
@@ -1126,7 +1125,7 @@ BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 			float offset = IsValidFloatStr(offsetStr) ? static_cast<float>(::strtod((WStringToString(*TruncFloatStr(offsetStr))).c_str(), NULL)) : 0;
 
 			// Get binary of teleportation target transform
-			uint32_t index = SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			auto index = SendMessage(GetDlgItem(hwnd, IDC_LOCFROM), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
 			uint32_t varindex = vfrom[index];
 			std::string binfrom = variables[varindex].value;
 
@@ -1167,7 +1166,7 @@ BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 	{
 		vfrom.clear();
 		vto.clear();
-		break;
+		return FALSE;
 	}
 	default:
 		return FALSE;
@@ -1175,7 +1174,7 @@ BOOL CALLBACK TeleportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lP
 	return TRUE;
 }
 
-BOOL CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -1198,14 +1197,14 @@ BOOL CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM l
 		else
 		{
 			str.clear();
-			QTRN q;
-			ANGLES a;
-
-			q.x = BinToFloat(value.substr(12 + 0, 4));
-			q.y = BinToFloat(value.substr(12 + 4, 4));
-			q.z = BinToFloat(value.substr(12 + 8, 4));
-			q.w = BinToFloat(value.substr(12 + 12, 4));
-			a = QuatToEuler(&q);
+			QTRN q =
+			{
+				BinToFloat(value.substr(12 + 0, 4)),
+				BinToFloat(value.substr(12 + 4, 4)),
+				BinToFloat(value.substr(12 + 8, 4)),
+				BinToFloat(value.substr(12 + 12, 4))
+			};
+			ANGLES a = QuatToEuler(&q);
 
 			for (auto& elem : { a.x, a.y, a.z })
 			{
@@ -1281,11 +1280,13 @@ BOOL CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM l
 				else
 				{
 					std::string oldvar = variables[indextable[iItem].second].value.substr(1);
-					QTRN qold;
-					qold.x = BinToFloat(oldvar.substr(12 + 0, 4));
-					qold.y = BinToFloat(oldvar.substr(12 + 4, 4));
-					qold.z = BinToFloat(oldvar.substr(12 + 8, 4));
-					qold.w = BinToFloat(oldvar.substr(12 + 12, 4));
+					QTRN qold =
+					{
+						BinToFloat(oldvar.substr(12 + 0, 4)),
+						BinToFloat(oldvar.substr(12 + 4, 4)),
+						BinToFloat(oldvar.substr(12 + 8, 4)),
+						BinToFloat(oldvar.substr(12 + 12, 4))
+					};
 
 					error = VectorStrToBin(value, 3, bin, TRUE, FALSE, TRUE, &qold, oldvar.substr(12, 16));
 					if (error > 0)
@@ -1340,7 +1341,7 @@ BOOL CALLBACK TransformProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM l
 	return TRUE;
 }
 
-BOOL CALLBACK ColorProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ColorProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static bool bIsColorProc = TRUE;
 
@@ -1410,27 +1411,27 @@ BOOL CALLBACK ColorProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-BOOL CALLBACK ContainerEditListChildProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ContainerEditListChildProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID == nullptr)
 		return FALSE;
 	switch (Message)
 	{
 	case WM_DESTROY:
 	{
+		SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(plID->hDefProc));
 		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-		plID = nullptr;
-		return TRUE;
+		return FALSE;
 	}
 	}
 	return CallWindowProc(plID->hDefProc, hwnd, Message, wParam, lParam);
 }
 
-BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static HWND hListEdit = NULL;
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID == nullptr)
 		return FALSE;
 
@@ -1464,7 +1465,7 @@ BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, 
 				ListView_GetItemText(hwnd, itemclicked.iItem, itemclicked.iSubItem, &buffer[0], szbuf);
 
 				hListEdit = CreateWindowEx(WS_EX_CLIENTEDGE, _T("EDIT"), &buffer[0], WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, pos_left, rekt.top, width, height, hwnd, (HMENU)1337, hInst, NULL);
-				AllocWindowUserData(hListEdit, (LONG)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
+				AllocWindowUserData(hListEdit, (LONG_PTR)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
 				SendMessage(hListEdit, WM_SETFONT, (WPARAM)hListFont, TRUE);
 				SendMessage(hListEdit, EM_SETLIMITTEXT, szbuf, 0);
 				SetFocus(hListEdit);
@@ -1492,7 +1493,7 @@ BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, 
 				// Create cancel button
 				HWND hCancelButton = CreateWindowEx(0, WC_BUTTON, L"Cancel", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, pos_left + (width - buttonwidth), rekt.top, buttonwidth, height, hwnd, (HMENU)IDC_BT5, hInst, NULL);
 				SendMessage(hCancelButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
-				AllocWindowUserData(hCancelButton, (LONG)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
+				AllocWindowUserData(hCancelButton, (LONG_PTR)ContainerEditListChildProc, itemclicked.iItem, RGB(255, 255, 255), itemclicked.iSubItem);
 			}
 		}
 		return FALSE;
@@ -1521,7 +1522,7 @@ BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, 
 			{
 			case IDC_BT1: // Apply
 			{
-				PLID *plID = (PLID *)GetWindowLong(hListEdit, GWL_USERDATA);
+				PLID *plID = (PLID *)GetWindowLongPtr(hListEdit, GWLP_USERDATA);
 				if (plID != nullptr)
 				{
 					std::wstring str = GetEditboxString(hListEdit);
@@ -1540,7 +1541,7 @@ BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, 
 			case IDC_BT4: // -
 			{
 				// The Cancel button contains info about which row and column we're in
-				PLID *plID = (PLID *)GetWindowLong(GetDlgItem(hwnd, IDC_BT5), GWL_USERDATA);
+				PLID *plID = (PLID *)GetWindowLongPtr(GetDlgItem(hwnd, IDC_BT5), GWLP_USERDATA);
 				if (plID == nullptr)
 					break;
 				if (LOWORD(wParam) == IDC_BT4) // -
@@ -1570,15 +1571,15 @@ BOOL CALLBACK ContainerEditListProc(HWND hwnd, uint32_t Message, WPARAM wParam, 
 	}
 	case WM_DESTROY:
 	{
+		SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(plID->hDefProc));
 		HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-		plID = nullptr;
-		return TRUE;
+		return FALSE;
 	}
 	}
 	return CallWindowProc(plID->hDefProc, hwnd, Message, wParam, lParam);
 }
 
-BOOL CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static BOOL bTwoColumns;
 	switch (Message)
@@ -1589,7 +1590,7 @@ BOOL CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPAR
 		const HWND hContainerList = GetDlgItem(hwnd, IDC_CONTAINERLIST);
 		ListView_SetExtendedListViewStyle(hContainerList, LVS_EX_GRIDLINES);
 
-		AllocWindowUserData(hContainerList, (LONG)ContainerEditListProc);
+		AllocWindowUserData(hContainerList, (LONG_PTR)ContainerEditListProc);
 
 		RECT rekt;
 		GetWindowRect(hContainerList, &rekt);
@@ -1694,7 +1695,7 @@ BOOL CALLBACK ContainerEditProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPAR
 	return TRUE;
 }
 
-BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	static int s_scrollYdelta = 0;
 	static HBRUSH s_backgroundBrush;
@@ -1750,7 +1751,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 		GetWindowRect(hwnd, &ScrollRekt);
 		ScrollRekt.bottom -= ScrollRekt.top;
 
-		int windowsize = wParam - ScrollRekt.bottom;
+		auto windowsize = wParam - ScrollRekt.bottom;
 
 		if (windowsize <= 0)
 			ShowScrollBar(hwnd, SB_VERT, FALSE);
@@ -1761,7 +1762,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 			SecureZeroMemory(&si, sizeof(SCROLLINFO));
 			si.cbSize = sizeof(SCROLLINFO);
 			si.fMask = SIF_ALL;
-			si.nMax = windowsize + pagesize;
+			si.nMax = static_cast<int>(windowsize + pagesize);
 			si.nPage = pagesize;
 			SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 		}
@@ -1770,7 +1771,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 	case WM_CTLCOLORDLG:
 	{
 		// Paint background white
-		return (INT_PTR)(s_backgroundBrush);
+		return reinterpret_cast<INT_PTR>(s_backgroundBrush);
 	}
 	case WM_CTLCOLORSTATIC:
 	{
@@ -1782,13 +1783,12 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 		{
 			HDC hdcStatic = (HDC)wParam;
 
-			PLID *plID = (PLID *)GetWindowLong((HWND)lParam, GWL_USERDATA);
+			PLID *plID = (PLID *)GetWindowLongPtr((HWND)lParam, GWLP_USERDATA);
 			if (plID != nullptr)
 			{
 				SetTextColor(hdcStatic, RGB(255, 255, 255));
-				//SetBkColor(hdcStatic, (COLORREF)GetSysColor(COLOR_WINDOW));
 				SetBkColor(hdcStatic, plID->cColor);
-				return (INT_PTR)(s_backgroundBrush);		// probably obsolete
+				return reinterpret_cast<INT_PTR>(s_backgroundBrush);		// probably obsolete
 			}
 		}
 		// Always return true to avoid gray background
@@ -1797,7 +1797,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 	case WM_DESTROY:
 	{
 		DeleteObject(s_backgroundBrush);
-		break;
+		return FALSE;
 	}
 	default:
 		return FALSE;
@@ -1805,7 +1805,7 @@ BOOL CALLBACK KeyListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPa
 	return TRUE;
 }
 
-BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	static std::vector<std::wstring> KeyNames = { L"keyferndale", L"keygifu", L"keyhayosiko", L"keyhome", L"keyruscko", L"keysatsuma"};
 	static HWND hKeys;
@@ -1838,7 +1838,7 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 			if ((EntryExists(LocationName) < 0) || EntryExists(KeyNames[index]) < 0 )
 				continue;
 
-			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, KeyNames[index].substr(3).c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hKeys, (HMENU)index, hInst, NULL);
+			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, KeyNames[index].substr(3).c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hKeys, (HMENU)IntToPtr(index), hInst, NULL);
 			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 			// Get the result
@@ -1917,7 +1917,7 @@ BOOL CALLBACK KeyManagerProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM 
 	return TRUE;
 }
 
-BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	static HWND hList;
 	static std::vector<Issue> issues;
@@ -1956,7 +1956,7 @@ BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPara
 
 		for (uint32_t i = 0; i < issues.size(); i++)
 		{
-			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, variables[issues[i].first].key.c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hList, (HMENU)i, hInst, NULL);
+			HWND hCheckBox = CreateWindowEx(0, WC_BUTTON, variables[issues[i].first].key.c_str(), BS_AUTOCHECKBOX | WS_CHILD | WS_VISIBLE, 6, 0 + offset, 150, yChar + 1, hList, (HMENU)IntToPtr(i), hInst, NULL);
 			CheckDlgButton(hList, i, BST_CHECKED);
 			SendMessage(hCheckBox, WM_SETFONT, (WPARAM)hListFont, TRUE);
 			offset += yChar;
@@ -1990,7 +1990,7 @@ BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPara
 			{
 				HWND hOut = GetDlgItem(hDialog, IDC_OUTPUT4);
 				ClearStatic(hOut, hDialog);
-				int RemainingIssues = issues.size() - IssuesFixed;
+				auto RemainingIssues = issues.size() - IssuesFixed;
 				if (RemainingIssues > 0)
 				{
 					std::wstring buffer(128, '\0');
@@ -2013,7 +2013,7 @@ BOOL CALLBACK IssueProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPara
 	return TRUE;
 }
 
-BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -2058,11 +2058,10 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 				{
 				case IDC_APPLY:
 				{
-					uint32_t index = 0;  
 					std::string location;
-					uint32_t index_what = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+					uint32_t index_what = static_cast<uint32_t>(SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0));
 					uint32_t index_to = 0;
-					index = SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+					uint32_t index = static_cast<uint32_t>(SendMessage(GetDlgItem(hwnd, IDC_LOCTO), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0));
 
 					if (index < locations.size())
 						location = WStringToString(locations[index].second);
@@ -2122,7 +2121,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 						std::wstring SanitizedTransformKey = keyprefix + itemAttributes[0].GetName();
 						Variables_add(Variable(Header(EntryValue::Ids[EntryValue::Transform].first), location, UINT_MAX, keyprefix + itemAttributes[0].GetName(), *SanitizeTagStr(SanitizedTransformKey)));
 
-						std::vector<char> attributes = itemTypes[index_what].GetAttributes(itemAttributes.size());
+						std::vector<char> attributes = itemTypes[index_what].GetAttributes(static_cast<uint32_t>(itemAttributes.size()));
 
 						for (uint32_t j = 0; j < attributes.size(); j++)
 						{
@@ -2183,7 +2182,7 @@ BOOL CALLBACK SpawnItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 	return TRUE;
 }
 
-BOOL CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -2198,7 +2197,7 @@ BOOL CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 		case WM_COMMAND:
 			if (HIWORD(wParam) == CBN_SELCHANGE)
 			{
-				uint32_t index_what = 0, index = SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+				uint32_t index_what = 0, index = static_cast<uint32_t>(SendMessage(GetDlgItem(hwnd, IDC_SPAWNWHAT), (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0));
 				for (uint32_t i = 0; i < itemTypes.size(); i++)
 				{
 					if (EntryExists(itemTypes[i].GetID()) >= 0)
@@ -2212,12 +2211,12 @@ BOOL CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 				{
 					if (StartsWithStr(variables[i].key, itemTypes[index_what].GetName()))
 					{
-						uint32_t id = ParseItemID(variables[i].key, itemTypes[index_what].GetName().size() + 1);
+						uint32_t id = ParseItemID(variables[i].key, static_cast<uint32_t>(itemTypes[index_what].GetName().size() + 1));
 						if (id != 0)
 						{
 							std::wstring idStr = std::to_wstring(id);
 
-							std::vector<char> attributes = itemTypes[index_what].GetAttributes(itemAttributes.size());
+							std::vector<char> attributes = itemTypes[index_what].GetAttributes(static_cast<uint32_t>(itemAttributes.size()));
 
 							for (uint32_t j = 0; j < attributes.size(); j++)
 							{
@@ -2239,7 +2238,7 @@ BOOL CALLBACK CleanItemProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM l
 
 LRESULT CALLBACK EditProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
-	PLID *thisplID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *thisplID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (thisplID == nullptr)
 		return FALSE;
 
@@ -2257,7 +2256,7 @@ LRESULT CALLBACK EditProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPa
 				if (hButton == (HWND)wParam)
 				{
 					// The focus got lost when any of the infinity buttons was clicked
-					PLID *plID = (PLID *)GetWindowLong(hButton, GWL_USERDATA);
+					PLID *plID = (PLID *)GetWindowLongPtr(hButton, GWLP_USERDATA);
 					bIgnoreContent = (plID != nullptr);
 					if (bIgnoreContent)
 					{
@@ -2283,9 +2282,9 @@ LRESULT CALLBACK EditProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPa
 		}
 		case WM_DESTROY:
 		{
+			SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(thisplID->hDefProc));
 			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, thisplID);
-			thisplID = nullptr;
-			return TRUE;
+			return FALSE;
 		}
 	}
 	return CallWindowProc(thisplID->hDefProc, hwnd, message, wParam, lParam);
@@ -2293,7 +2292,7 @@ LRESULT CALLBACK EditProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lPa
 
 LRESULT CALLBACK ComboProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID == nullptr)
 		return FALSE; 
 
@@ -2302,14 +2301,14 @@ LRESULT CALLBACK ComboProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lP
 		case WM_CLOSE:
 		{
 			DestroyWindow(hwnd);
-			return 0;
+			return FALSE;
 		}
 		case WM_DESTROY:
 		{
 			hCEdit = NULL;
+			SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(plID->hDefProc));
 			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-			plID = nullptr;
-			return TRUE;
+			return FALSE;
 		}
 	}
 	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
@@ -2332,7 +2331,7 @@ LRESULT CALLBACK ListViewProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 // Namely: inf buttons
 LRESULT CALLBACK ListCtrlChildProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM lParam)
 {
-	PLID *plID = (PLID *)GetWindowLong(hwnd, GWL_USERDATA);
+	PLID *plID = (PLID *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (plID == nullptr)
 		return FALSE;
 
@@ -2340,9 +2339,9 @@ LRESULT CALLBACK ListCtrlChildProc(HWND hwnd, uint32_t message, WPARAM wParam, L
 	{
 		case WM_DESTROY:
 		{
+			SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(plID->hDefProc));
 			HeapFree(GetProcessHeap(), HEAP_NO_SERIALIZE, plID);
-			plID = nullptr;
-			return TRUE;
+			return FALSE;
 		}
 	}
 	return CallWindowProc(plID->hDefProc, hwnd, message, wParam, lParam);
@@ -2425,7 +2424,7 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 				SendMessage(hEdit, EM_SETSEL, -1, 0);
 
 				// Alloc memory on heap to store EditBox's default window process and data
-				AllocWindowUserData(hEdit, (LONG)EditProc, 0);
+				AllocWindowUserData(hEdit, (LONG_PTR)EditProc, 0);
 
 				if (type != EntryValue::Float)
 					break;
@@ -2435,13 +2434,13 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 				SendMessage(hNegInfButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store NegInfButton's default window process
-				AllocWindowUserData(hNegInfButton, (LONG)ListCtrlChildProc, 0);
+				AllocWindowUserData(hNegInfButton, (LONG_PTR)ListCtrlChildProc, 0);
 
 				const HWND hPosInfButton = CreateWindowEx(0, WC_BUTTON, posInfinity.c_str(), WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, (pos_left + width) - (szButton), rekt.top, szButton, height, hwnd, (HMENU)(IDC_BUTPOSINF), hInst, NULL);
 				SendMessage(hPosInfButton, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 				// Alloc memory on heap to store PosInfButton's default window process
-				AllocWindowUserData(hPosInfButton, (LONG)ListCtrlChildProc, 1);
+				AllocWindowUserData(hPosInfButton, (LONG_PTR)ListCtrlChildProc, 1);
 
 				break;
 			}
@@ -2449,7 +2448,7 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 			{
 				int boolindex = value.c_str()[0];
 				hCEdit = CreateWindow(WC_COMBOBOX, (LPWSTR)_T(""), CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE, pos_left + 2, rekt.top - 2, 100, height, hwnd, NULL, hInst, NULL);
-				AllocWindowUserData(hCEdit, (LONG)ComboProc, 0);
+				AllocWindowUserData(hCEdit, (LONG_PTR)ComboProc, 0);
 
 				SendMessage(hCEdit, WM_SETFONT, (WPARAM)hListFont, TRUE);
 				SendMessage(hCEdit, (uint32_t)CB_ADDSTRING, (WPARAM)0, (LPARAM)bools[boolindex].c_str());
@@ -2520,7 +2519,7 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 		if (variables[indextable[iItem].second].header.IsNonContainerOfValueType(EntryValue::Transform))
 			InsertMenu(hPopupMenu, -1, MF_BYPOSITION | MF_STRING, ID_SHOW_ON_MAP, _T("Show on map"));
 #endif
-		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, lParam, wParam, hwnd, NULL);
+		TrackPopupMenuEx(hPopupMenu, TPM_LEFTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN | TPM_VERPOSANIMATION, static_cast<int>(lParam), static_cast<int>(wParam), hwnd, NULL);
 		DestroyMenu(hPopupMenu);
 
 		// Clear selection / focus of listitem (blue highlight)
@@ -2528,8 +2527,8 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 		GetWindowRect(hwnd, &rekt);
 		
 		LVHITTESTINFO itemclicked;
-		itemclicked.pt.x = lParam - rekt.left;
-		itemclicked.pt.y = wParam - rekt.top;
+		itemclicked.pt.x = static_cast<LONG>(lParam) - rekt.left;
+		itemclicked.pt.y = static_cast<LONG>(wParam) - rekt.top;
 		const int lResult = ListView_SubItemHitTest(hwnd, &itemclicked);
 		if (lResult != -1)
 		{
@@ -2550,8 +2549,8 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 		// handle hcedits messages in here because I'm messy like that 
 		if (HIWORD(wParam) == CBN_SELCHANGE)
 		{
-			const int ItemIndex = SendMessage((HWND)lParam, (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
-			const int oSize = SendMessage((HWND)lParam, (uint32_t)CB_GETLBTEXTLEN, (WPARAM)ItemIndex, 0);
+			const auto ItemIndex = SendMessage((HWND)lParam, (uint32_t)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			const auto oSize = SendMessage((HWND)lParam, (uint32_t)CB_GETLBTEXTLEN, (WPARAM)ItemIndex, 0);
 			std::wstring value(oSize, '\0');
 			SendMessage((HWND)lParam, (uint32_t)CB_GETLBTEXT, (WPARAM)ItemIndex, (LPARAM)value.data());
 			SendMessage(hCEdit, CB_RESETCONTENT, 0, 0);
@@ -2601,7 +2600,7 @@ LRESULT CALLBACK ListCtrlProc(HWND hwnd, uint32_t message, WPARAM wParam, LPARAM
 	return CallWindowProc(DefaultListCtrlProc, hwnd, message, wParam, lParam);
 }
 
-BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam)
 {
 	switch (Message)
 	{
@@ -2622,7 +2621,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 		DLGHDR *pHdr = (DLGHDR *)LocalAlloc(LPTR, sizeof(DLGHDR));
 
 		// Save a pointer to the DLGHDR structure in the window data of the dialog box. 
-		SetWindowLongPtr(hwnd, GWL_USERDATA, (LONG)pHdr);
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)pHdr);
 
 		// Create the tab control.
 		pHdr->hwndTab = CreateWindowEx(0, WC_TABCONTROL, 0,
@@ -2630,6 +2629,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 			0, 0, 100, 100,
 			hwnd, NULL, hInst, NULL
 		);
+
 		SendMessage(pHdr->hwndTab, WM_SETFONT, (WPARAM)hListFont, TRUE);
 
 		if (pHdr->hwndTab == NULL)
@@ -2727,7 +2727,7 @@ BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 		if ((((LPNMHDR)lParam)->code == TCN_SELCHANGE))
 		{
 			// Get the dialog header data.
-			DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hwnd, GWL_USERDATA);
+			DLGHDR *pHdr = (DLGHDR *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 			// Get the index of the selected tab.
 			const int iSel = TabCtrl_GetCurSel(pHdr->hwndTab);
@@ -2744,9 +2744,9 @@ BOOL CALLBACK ReportProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 	case WM_DESTROY:
 	{
 		// Free memory
-		DLGHDR *pHdr = (DLGHDR *)GetWindowLong(hwnd, GWL_USERDATA);
+		DLGHDR *pHdr = (DLGHDR *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 		LocalFree(pHdr);
-		return 0;
+		return FALSE;
 	}
 	default:
 		return FALSE;

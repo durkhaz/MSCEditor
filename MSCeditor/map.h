@@ -13,10 +13,17 @@
 #include "heightmap.h"
 #define LEN(arr) (sizeof (arr) / sizeof (arr)[0])
 
+// Make sure we link against the intended symbol on Windows 7
+#if defined(CLSID_WICImagingFactory)
+#undef CLSID_WICImagingFactory
+#endif
+
 struct ID2D1Factory;
 struct IWICImagingFactory;
 struct IDWriteFactory;
+struct IWICFormatConverter;
 class Variable;
+typedef std::pair<HRESULT, std::string> HERROR;
 
 // DDS MD5 checksum
 static const BYTE s_DDSMD5[] = { 0x71, 0xDE, 0xA1, 0x77, 0x3D, 0xDC, 0x1F, 0xE3, 0xCD, 0xD0, 0x0B, 0x7F, 0x57, 0x07, 0x55, 0x18 };
@@ -101,18 +108,14 @@ public:
 	void ShowObjectOnMap(Variable* var);
 
 private:
-	static BOOL CALLBACK SidebarInfoProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
-	static BOOL CALLBACK SidebarListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
-	static BOOL CALLBACK SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
-	static BOOL CALLBACK MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
-	static BOOL CALLBACK MainProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+	static INT_PTR CALLBACK SidebarInfoProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+	static INT_PTR CALLBACK SidebarListProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+	static INT_PTR CALLBACK SidebarProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+	static INT_PTR CALLBACK MapProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+	static INT_PTR CALLBACK MainProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
 
-	void PrepareMapDDS();
-	HRESULT LoadDDS(const bool bCalledFromThread = FALSE);
-	bool IsMapDDSValid();
-	HRESULT CreateDeviceResources();
-	HRESULT CreateDeviceIndependentResources();
-
+	HERROR CreateDeviceResources();
+	HERROR CreateDeviceIndependentResources();
 	SidebarListEntry* FindVariableInSidebarList(Variable* var);
 	void RenderTextWithShadow(const Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget>& RenderTarget, const D2D1_POINT_2F Pos, const Microsoft::WRL::ComPtr<IDWriteTextLayout>& TextLayout, const Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>& Brush, const D2D1_COLOR_F Color, const FLOAT offset = 1.f);
 	HRESULT OnMapRender(HWND hwnd);
@@ -120,11 +123,26 @@ private:
 	HRESULT OnSidebarRender(HWND hwnd);
 	HRESULT OnSidebarListRender(HWND hwnd);
 	HRESULT OnSidebarInfoRender(HWND hwnd);
-	BOOL OnSidebarVScroll(WPARAM wParam, LPARAM lParam);
-	BOOL OnSidebarMouseWheel(WPARAM wParam, LPARAM lParam);
-	BOOL OnSidebarLButtondown(WPARAM wParam, LPARAM lParam);
+	INT_PTR OnSidebarVScroll(WPARAM wParam, LPARAM lParam);
+	INT_PTR OnSidebarMouseWheel(WPARAM wParam, LPARAM lParam);
+	INT_PTR OnSidebarLButtondown(WPARAM wParam, LPARAM lParam);
 	void SidebarToggleCategory(uint32_t type);
 	void SidebarUpdateScrollbar(uint32_t nPage = UINT_MAX);
+
+	// Convert JPG to raw bitmap
+	HERROR PrepareRawImage(BYTE** pDeobfuscatedResource, Microsoft::WRL::ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const bool bIsDDS = TRUE);
+
+	// Gets the JPG from resource, converts it to bitmap, then to DDS and then saves it to file. Is working on a seperate thread. Only executed for Windows 8 and greater
+	void PrepareMapDDS();
+
+	// Load the JPG from resource
+	HERROR LoadJPG();
+
+	// Loads DDS from file. Can be called from seperate thread
+	HERROR LoadDDS(const bool bCalledFromThread = FALSE);
+
+	// Checks wether the DDS file is valid
+	bool IsMapDDSValid();
 
 	// Remaps a point of the rendered map to that of the absolute map
 	D2D1_POINT_2F RemapRenderedMapPosToMapPos(const D2D1_POINT_2F* RenderedMapPos) const;
@@ -188,6 +206,7 @@ private:
 	FLOAT												m_MapZoom;
 	INT													m_SidebarListCurrentScrollpos;
 	INT													m_SidebarListScrollRange;
+	UINT												m_SatsumaTransformIndex;
 
 	D2D1_POINT_2F										m_MapWindowMousePos;
 	D2D1_POINT_2F										m_MapDragPrevPt;

@@ -26,4 +26,4 @@
 #endif
 
 
-BOOL CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
