@@ -17,47 +17,6 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 	{
 		case WM_INITDIALOG:
 		{
-#ifdef _DEBUG
-			// Alloc debug console
-			AllocConsole();
-			std::wstring cTitle = Title + _T(" Debug Console");
-			SetConsoleTitle(cTitle.c_str());
-
-			// Get STDOUT handle
-			HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-			int SystemOutput = _open_osfhandle(intptr_t(ConsoleOutput), _O_TEXT);
-			FILE *COutputHandle = _fdopen(SystemOutput, "w");
-
-			// Get STDERR handle
-			HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
-			int SystemError = _open_osfhandle(intptr_t(ConsoleError), _O_TEXT);
-			FILE *CErrorHandle = _fdopen(SystemError, "w");
-
-			// Get STDIN handle
-			HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
-			int SystemInput = _open_osfhandle(intptr_t(ConsoleInput), _O_TEXT);
-			FILE *CInputHandle = _fdopen(SystemInput, "r");
-
-			//make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
-			std::ios::sync_with_stdio(true);
-
-			// Redirect the CRT standard input, output, and error handles to the console
-			freopen_s(&CInputHandle, "CONIN$", "r", stdin);
-			freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
-			freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
-
-			// Move console over to other screen and maximize, if possible
-			HWND hConsole = GetConsoleWindow();
-			SetWindowPos(hConsole, NULL, 3000, 0, 200, 200, SWP_NOSIZE);
-			ShowWindow(hConsole, SW_MAXIMIZE);
-			
-			std::wcout << cTitle << _T(" successfully allocated.") << std::endl;
-
-			// Log
-			dbglog = new DebugOutput(L"log.txt");
-			dbglog->LogNoConsole(L"~~~\n\nNEW LOG INSTANCE\n\n~~~\n");
-#endif
-
 			//init common controls
 			INITCOMMONCONTROLSEX iccex;
 			iccex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -65,7 +24,7 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 
 			if (!InitCommonControlsEx(&iccex))
 			{
-				MessageBox(hwnd, _T("Could not initialize common controls!"), Title.c_str(), MB_OK | MB_ICONERROR);
+				MessageBox(hwnd, L"Could not initialize common controls!", Title.c_str(), MB_OK | MB_ICONERROR);
 				EndDialog(hwnd, 0);
 			}
 
@@ -88,22 +47,22 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 			SetWindowText(hDialog, (LPCWSTR)Title.c_str());
 
 			// Prepare and set app folder
-			if (FAILED(FindAndCreateAppFolder()))
+			try { FindAndCreateAppFolder(); }
+			catch (const EditorException& e)
 			{
 				std::wstring buffer(128, '\0');
-				swprintf(&buffer[0], 128, GLOB_STRS[37].c_str(), appfolderpath.c_str());
-				MessageBox(hwnd, buffer.c_str(), Title.c_str(), MB_OK);
+				e.MakeString(buffer);
+				MessageBox(hwnd, buffer.c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 			}
 
 			//load inifile
 			if (LoadDataFile(IniFile))
 				MessageBox(hwnd, GLOB_STRS[35].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
-			else
-				if (bFirstStartup)
-				{
-					HWND hHelp = CreateDialog(hInst, MAKEINTRESOURCE(IDD_HELP), hDialog, HelpProc);
-					ShowWindow(hHelp, SW_SHOW);
-				}
+			else if (bFirstStartup)
+			{
+				HWND hHelp = CreateDialog(hInst, MAKEINTRESOURCE(IDD_HELP), hDialog, HelpProc);
+				ShowWindow(hHelp, SW_SHOW);
+			}
 
 			//check updates
 			if (bCheckForUpdate && !appfolderpath.empty())
@@ -121,7 +80,7 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 						switch (MessageBox(NULL, (GLOB_STRS[36] + changelog).c_str(), Title.c_str(), MB_YESNO | MB_ICONINFORMATION))
 						{
 						case IDYES:
-							ShellExecute(NULL, _T("open"), link.c_str(), NULL, NULL, SW_SHOWDEFAULT);
+							ShellExecute(NULL, L"open", link.c_str(), NULL, NULL, SW_SHOWDEFAULT);
 							EndDialog(hDialog, 0);
 							break;
 						default:
@@ -147,27 +106,23 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 			HMENU menu = GetSubMenu(GetMenu(hDialog), 1);
 			EnableMenuItem(menu, GetMenuItemID(menu, 8), MF_ENABLED);
 #endif /*_MAP*/
-			// If we got a path from the command line, try to open
-			// Make sure this is at the end of InitDialog because it contains breaks
-			std::wstring InitFile = std::wstring((LPWSTR)lParam);
-			if (!InitFile.empty())
+
+			typedef std::pair<std::wstring, void (*)(std::wstring&)> CLArg;
+			static const std::vector<CLArg> CLArgs = { CLArg(L"console", CommandLineConsole), CLArg(L"file", CommandLineFile) };							
+			std::wstring CLArgsStr = std::wstring((LPWSTR)lParam);
+			if (!CLArgsStr.empty())
 			{
-				size_t found = InitFile.find_last_of('\\');
-				if (found != std::string::npos)
+				std::vector<std::pair<std::wstring, std::wstring>> args;
+				ParseCommandLine(CLArgsStr, args);
+
+				for (int32_t i = 0; i < args.size(); i++)
 				{
-					// Check if we have an actual file at our hands
-					HANDLE hTest = CreateFile(InitFile.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, NULL, NULL);
-					if (hTest == INVALID_HANDLE_VALUE)
-						break;
-
-					LARGE_INTEGER fSize;
-					if (!GetFileSizeEx(hTest, &fSize))
-						break;
-
-					CloseHandle(hTest);
-					filename = InitFile.substr(found + 1);
-					filepath = InitFile;
-					InitMainDialog(hDialog);
+					for (int32_t j = 0; j < CLArgs.size(); j++)
+						if (args[i].first == CLArgs[j].first && CLArgs[j].second)
+						{
+							CLArgs[j].second(args[i].second);
+							break;
+						}
 				}
 			}
 			break;
@@ -189,7 +144,7 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 						size_t index = lplvcd->nmcd.dwItemSpec > indextable.size() - 1 ? indextable.size() - 1 : lplvcd->nmcd.dwItemSpec;
 						if (variables[indextable[index].second].IsRemoved())
 						lplvcd->clrText = RGB(128, 128, 128);
-						else if (variables[indextable[index].second].IsModified() || variables[indextable[index].second].IsAdded())
+						else if (variables[indextable[index].second].IsModified() || variables[indextable[index].second].IsAdded() || variables[indextable[index].second].IsRenamed())
 						lplvcd->clrText = RGB(255, 0, 0);
 						result = CDRF_NEWFONT;
 						break;
@@ -286,7 +241,18 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 			switch (LOWORD(wParam))
 			{
 				case ID_FILE_OPEN:
-					if (CanClose()) OpenFileDialog();
+					if (CanClose())
+					{
+						std::wstring fpath, fname;
+						OpenFileDialog(fpath, fname);
+
+						if (!fpath.empty() && !fname.empty())
+						{
+							filename = fname;
+							filepath = fpath;
+							InitMainDialog(hDialog);
+						}
+					}
 					break;
 				case ID_FILE_EXIT:
 					if (CanClose())
@@ -302,7 +268,7 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 				{
 					std::wstring folderpath = filepath;
 					folderpath.resize(filepath.size() - filename.size());
-					ShellExecute(NULL, _T("open"), folderpath.c_str(), NULL, NULL, SW_SHOWDEFAULT);
+					ShellExecute(NULL, L"open", folderpath.c_str(), NULL, NULL, SW_SHOWDEFAULT);
 					break;
 				}
 				case ID_FILE_GAMESTEAM:
@@ -312,12 +278,14 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 				}
 				case ID_FILE_GAME:
 				{
+					static std::wstring gamepath = L"\\steamapps\\common\\My Summer Car\\";
+					static std::wstring gameexec = L"mysummercar.exe";
 					std::wstring steampath = ReadRegistry(HKEY_CURRENT_USER, L"SOFTWARE\\Valve\\Steam", L"SteamPath");
 		
 					if (steampath.empty()) break;
-					std::wstring gamepath = L"\\steamapps\\common\\My Summer Car\\mysummercar.exe";
+					
 					//try default path
-					if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, _T("open"), (steampath + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT)) > 32) break;
+					if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, L"open", (steampath + gamepath + gameexec).c_str(), NULL, (steampath + gamepath).c_str(), SW_SHOWDEFAULT)) > 32) break;
 
 					//user is a fancypants and stores library on a different drive. Read configfile
 					steampath += L"\\config\\config.vdf";
@@ -351,7 +319,7 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 						
 					for (uint32_t i = 0; i < basefolders.size(); ++i)
 					{
-						if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, _T("open"), (basefolders[i] + gamepath).c_str(), NULL, NULL, SW_SHOWDEFAULT)) > 32) break;
+						if (reinterpret_cast<INT_PTR>(ShellExecute(NULL, L"open", (basefolders[i] + gamepath + gameexec).c_str(), NULL, (basefolders[i] + gamepath).c_str(), SW_SHOWDEFAULT)) > 32) break;
 					}
 					break;
 				}
@@ -470,29 +438,36 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 					}
 					break;
 				}
-				case ID_TOOLS_DUMP:
+				case ID_TOOLS_COMPARE:
 				{
-					if (variables.size() == 0) break;
-					std::wofstream dump(L"entry_dump.txt", std::wofstream::out, std::wofstream::trunc);
-					if (!dump.is_open()) MessageBox(hwnd, GLOB_STRS[30].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
+					std::wstring fpath, fname;
+					OpenFileDialog(fpath, fname);
 
+					if (fpath.empty())
+						break;
 
-					for (uint32_t i = 0; i < variables.size(); i++)
+					std::vector<Variable> otherVariables;
+					try
 					{
-						std::wstring str = variables[i].GetDisplayString();
-						dump << (L"\"" + StringToWString(variables[i].key) + L"\" \"" + str + L"\"\n");
+						auto err = ParseSavegame(&fpath, &otherVariables);
+						if (std::get<0>(err) != -1)
+							MessageBox(hDialog, (GLOB_STRS[31] + std::to_wstring(std::get<1>(err)) + GLOB_STRS[std::get<0>(err)]).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
 					}
+					catch (const std::exception& e) { MessageBox(hDialog, (GLOB_STRS[46] + WidenStr(std::string(e.what()))).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR); break; }
 
-					if (dump.bad() || dump.fail())
-					{
-						MessageBox(hwnd, GLOB_STRS[30].c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
-					}
-					else
-					{
-						//DebugFetchVariablesFromAssets();
-						MessageBox(hwnd, GLOB_STRS[40].c_str(), Title.c_str(), MB_OK );
-					}
-					dump.close();
+					if (otherVariables.empty())
+						break;
+
+					INT_PTR Result = DialogBoxParam(hInst, MAKEINTRESOURCE(IDD_COMPAREOPTIONS), hwnd, CompareProc, NULL);
+					if (Result == NULL)
+						break;
+
+					auto Options = reinterpret_cast<COMPDLGRET*>(Result);
+					CompareVariables(&variables, &otherVariables, Options);
+
+					if (!HeapFree(GetProcessHeap(), 0, Options))
+						LOG(L"HeapFree failed for Options Struct\n");
+
 					break;
 				}
 				case ID_ITEMS_SPAWNITEMS:
@@ -500,6 +475,11 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lPar
 					EnableWindow(hDialog, FALSE);
 					HWND hSpawnitems = CreateDialog(hInst, MAKEINTRESOURCE(IDD_SPAWNITEM), hDialog, SpawnItemProc);
 					ShowWindow(hSpawnitems, SW_SHOW);
+					break;
+				}
+				case ID_ITEMS_CLEANUPITEMS:
+				{
+					CleanEmptyItems();
 					break;
 				}
 				case ID_TOOLS_MANAGEKEYS:

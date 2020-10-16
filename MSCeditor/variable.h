@@ -9,6 +9,7 @@
 #define VAR_MODIFIED	0b1
 #define VAR_REMOVED		0b10
 #define VAR_ADDED		0b100
+#define VAR_RENAMED		0b1000
 
 /*
 header structure example:
@@ -110,7 +111,7 @@ public:
 	uint32_t keytype = EntryValue::Null;
 
 	// The datatype of the value. Every entry has a value
-	uint32_t valuetype = EntryValue::Null;;
+	uint32_t valuetype = EntryValue::Null;
 
 	// Not sure what these do tbh lol
 	std::string properties = "";
@@ -167,10 +168,10 @@ public:
 	// Index of the entry where it was found in the file originally. When saving, we keep the order, just in case
 	uint32_t pos;
 
-	// UTF-16 Identifier of the entry. File-state is UTF-8
+	// Sanatized lowercase UTF-16 Identifier of the entry. File-state is UTF-8
 	std::wstring key;
 
-	// Unformatted UTF-16 Identifier as it was found in the file
+	// Unsanatized UTF-16 Identifier as it was found in the file
 	std::wstring raw_key;
 
 	// Binary value of the entry, as it was read in from file. This value can be modified
@@ -178,6 +179,9 @@ public:
 
 	// Original value that can't be modified. This is being checked against to detect changes
 	std::string static_value;
+
+	// Backup of unformatted UTF-16 Identifier as it was found in the file
+	std::wstring static_raw_key;
 
 	// Group id of an entry. Entries of similiar name will be formed into a group
 	uint32_t group;
@@ -191,9 +195,13 @@ public:
 	bool IsModified() const;
 	bool IsAdded() const;
 	bool IsRemoved() const;
+	bool IsRenamed() const;
 	void SetModified(bool b);
 	void SetAdded(bool b);
 	void SetRemoved(bool b);
+	void SetRenamed(bool b);
+	void SetRawKey(std::wstring s);
+	void ResetRawKey();
 
 	std::wstring GetDisplayString() const;
 	std::wstring GetTypeDisplayString() const;
@@ -215,10 +223,10 @@ public:
 	Item(std::wstring displayname, std::wstring name, std::vector<char> attributes, std::string layer, std::wstring id = L"");
 
 	std::vector<char> GetAttributes(const uint32_t size);
-	std::wstring GetName() { return m_name; }
-	std::wstring GetDisplayName() { return m_displayname; }
-	std::wstring GetID() { return m_ID; }
-	std::string GetLayer() { return m_layer; }
+	std::wstring GetName() const { return m_name; }
+	std::wstring GetDisplayName() const { return m_displayname; }
+	std::wstring GetNameID() const { return m_ID; }
+	std::string GetLayer() const { return m_layer; }
 };
 
 class ItemAttribute
@@ -239,4 +247,21 @@ public:
 	double GetMin() { return m_min; }
 	double GetMax() { return m_max; }
 	std::wstring GetName() { return m_name; }
+};
+
+class EditorException : public std::exception
+{
+private:
+	const std::wstring m_str;
+	const int64_t m_hr;
+public:
+	EditorException(wchar_t* str, int64_t hr)
+		: m_str(std::wstring(str) + L" Errorcode: %d."), m_hr(std::move(hr))
+	{ 
+
+	}
+	void MakeString(std::wstring &str) const
+	{
+		swprintf(&str[0], str.size(), m_str.c_str(), m_hr);
+	}
 };

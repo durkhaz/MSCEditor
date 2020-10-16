@@ -3,3 +3,11 @@
 ################################################################################
 
 /MSCeditor/MSCeditor.vcxproj.filters
+/MSCeditor/MSCeditor.vcxproj.user
+/MSCeditor/MapAssetCompressed/fuck.dds
+/MSCeditor/MapAssetCompressed
+/MSCeditor/MapAsset/old_versions
+/MSCeditor/MapAsset/map_dxt_old.jpg
+/MSCeditor/MapAsset/map_dxt_source.jpg
+/MSCeditor/MapAsset/FileObfuscator.exe
+/.vs

@@ -584,7 +584,7 @@ INT_PTR CALLBACK MapDialog::MainProc(HWND hwnd, unsigned int Message, WPARAM wPa
 			LOG(L"Map : Instantiation failed!\n");
 			std::wstring hrstr(64, '\0');
 			HRToStr(hr.first, hrstr);
-			std::wstring bla = StringToWString(hr.second);
+			std::wstring bla = WidenStr(hr.second);
 			hrstr += bla;
 			throw hrstr;
 		}

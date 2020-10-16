@@ -7,7 +7,6 @@
 #include "variable.h"
 #include "structs.h"
 
-#ifdef _DEBUG
 #include <iostream>
 #include <fstream>		// File stream input output
 class DebugOutput
@@ -56,10 +55,7 @@ public:
 
 extern DebugOutput *dbglog;
 
-#define LOG(val) dbglog->Log(val)
-#else
-#define LOG(val) while(false)
-#endif
+#define LOG(val) if (dbglog) dbglog->Log(val)
 
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
 #define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
@@ -67,8 +63,6 @@ extern DebugOutput *dbglog;
 #define HX_STARTENTRY	 0x7E
 #define HX_ENDENTRY		 0x7B
 #define LPARAM_OFFSET	 100000
-
-
 
 extern WNDPROC DefaultListCtrlProc, DefaultListViewProc;
 extern int iItem, iSubItem;
@@ -130,26 +124,14 @@ extern const std::wstring GLOB_STRS[];
 
 extern const std::wstring BListSymbols[];
 
+extern const std::wstring HtmlHeader;
+
+extern const std::wstring HtmlTableHeader;
+
+extern const std::wstring HtmlTableEntry;
+
+extern const std::wstring HtmlEnd;
+
 extern const TCHAR HelpStr[];
 
 extern const std::vector<std::pair<std::wstring, std::wstring>> NameTable;
-
-typedef struct {
-	WORD dlgVer;
-	WORD signature;
-	DWORD helpID;
-	DWORD exStyle;
-	DWORD style;
-	WORD cDlgItems;
-	short x;
-	short y;
-	short cx;
-	short cy;
-} DLGTEMPLATEEX;
-
-typedef struct tag_dlghdr {
-	HWND hwndTab;       // tab control 
-	HWND hwndDisplay;   // current child dialog box 
-	RECT rcDisplay;     // display rectangle for the tab control 
-	DLGTEMPLATEEX *apRes[2];
-} DLGHDR;

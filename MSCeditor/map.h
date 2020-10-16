@@ -7,10 +7,12 @@
 #pragma comment(lib, "Shlwapi.lib")
 
 #include <d2d1helper.h>
+#include <string>
 #include <vector>
 #include <forward_list>
 #include <wrl\client.h>
 #include "heightmap.h"
+
 #define LEN(arr) (sizeof (arr) / sizeof (arr)[0])
 
 // Make sure we link against the intended symbol on Windows 7
@@ -24,9 +26,10 @@ struct IDWriteFactory;
 struct IWICFormatConverter;
 class Variable;
 typedef std::pair<HRESULT, std::string> HERROR;
+typedef GUID WICPixelFormatGUID;
 
 // DDS MD5 checksum
-static const BYTE s_DDSMD5[] = { 0x71, 0xDE, 0xA1, 0x77, 0x3D, 0xDC, 0x1F, 0xE3, 0xCD, 0xD0, 0x0B, 0x7F, 0x57, 0x07, 0x55, 0x18 };
+static const BYTE s_DDSMD5[] = { 0x3b, 0x23, 0xf5, 0x22, 0xdb, 0x9e, 0xed, 0x50, 0xc3, 0x35, 0x6a, 0xde, 0xf0, 0x89, 0x12, 0x64 };
 
 // Map is taken from a slight angle in orthographic view (10°) so sprites such as trees can be seen.
 // That equates to the y axis having  1.015 GU/Px (game units / map pixel) more than the x axis.
@@ -66,7 +69,7 @@ static const INT s_MapSidebarInfoHeight = 20;
 static const FLOAT s_MapMaxZoom = 16.f;
 
 // Name of map DDS
-static const wchar_t s_MapDDSName[] = L"msce110.map";
+static const wchar_t s_MapDDSName[] = L"msce111.map";
 
 // Color for the highlights (a neon yellow)
 static const D2D1::ColorF s_ColorHighlights = D2D1::ColorF(1.f, 1.f, 0.f, 1.f);
@@ -82,6 +85,9 @@ D2D1_POINT_2F ToMapPos(const D2D1_POINT_2F& RelativePos, const D2D1_SIZE_F& WndS
 
 // Remaps a map position to a relative position
 D2D1_POINT_2F ToRelativePos(const D2D1_POINT_2F& MapPos, const D2D1_SIZE_F& WndSize);
+
+static const INT s_eSz = 128;
+static const char* s_eStr = "\nFunction \"%s\" Line %d";
 
 class SidebarListEntry
 {
@@ -130,7 +136,7 @@ private:
 	void SidebarUpdateScrollbar(uint32_t nPage = UINT_MAX);
 
 	// Convert JPG to raw bitmap
-	HERROR PrepareRawImage(BYTE** pDeobfuscatedResource, Microsoft::WRL::ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const bool bIsDDS = TRUE);
+	HERROR PrepareRawImage(BYTE** pDeobfuscatedResource, Microsoft::WRL::ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const GUID& format);
 
 	// Gets the JPG from resource, converts it to bitmap, then to DDS and then saves it to file. Is working on a seperate thread. Only executed for Windows 8 and greater
 	void PrepareMapDDS();

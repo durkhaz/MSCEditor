@@ -11,21 +11,26 @@
 #include "resource.h"
 #include "utils.h"
 #include "bcrypt.h"
-#include <VersionHelpers.h>
+
+#if _HAS_CXX17
+template <class _StringViewIsh>
+using _Is_string_view_ish =
+enable_if_t<conjunction_v<is_convertible<const _StringViewIsh&, basic_string_view<_Elem, _Traits>>,
+	negation<is_convertible<const _StringViewIsh&, const _Elem*>>>,
+	int>;
+#endif // _HAS_CXX17
+
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 #endif // NT_SUCCESS
 #define STATUS_SUCCESS 0x00000000
 
-#define MAKE_HR(her) \
-if (FAILED(her.first) && her.second[0] != s_eStr[0]) \
-sprintf_s(&(her.second)[0], s_eSz, s_eStr, __FUNCTION__, __LINE__ - 3)
+#define MAKE_HR(hr) \
+if (FAILED(hr.first) && hr.second[0] != s_eStr[0]) \
+sprintf_s(&(hr.second)[0], s_eSz, s_eStr, __FUNCTION__, __LINE__ - 3)
 
 using Microsoft::WRL::ComPtr;
-
-static const char* s_eStr = "\nFunction \"%s\" Line %d";
-static const INT s_eSz = 128;
 
 /******************************************************************
 *                                                                 *
@@ -84,31 +89,108 @@ D2D1_SIZE_F GetCursorSize()
 					n = j;
 
 	DeleteDC(dc);
-	DeleteObject(ii.hbmColor);
+	if (ii.hbmColor != NULL)
+		DeleteObject(ii.hbmColor);
 	DeleteObject(ii.hbmMask);
 	size.height = static_cast<FLOAT>(n - ii.yHotspot);
 	size.width = size.height;
 	return size;
 }
 
+// MAKE SURE THESE AREN'T INCLUDED IN THE SOURCE
 namespace Obfuscate
 {
+	static const auto ByteMin = static_cast<unsigned char>(0);
+	static const auto ByteOne = static_cast<unsigned char>(1);
+	static const auto ByteTwo = static_cast<unsigned char>(2);
+	static const auto ByteRange = static_cast<unsigned char>(253);
+	static const auto ByteMax = static_cast<unsigned char>(255);
+
+	inline bool IsByteObfuscatable(const unsigned char Byte)
+	{
+		return Byte > ByteMin && Byte < ByteMax;
+	}
+
+	inline void ObfuscateByte(unsigned char& Byte, unsigned char& Offset)
+	{
+		if (IsByteObfuscatable(Byte))
+		{
+			Byte = ~Byte;
+			unsigned char nByte = Byte - ByteOne;
+			unsigned char sByte = nByte + Offset;
+			if (sByte <= nByte && Offset > 0)
+				sByte += ByteTwo;
+			else if (sByte > ByteRange)
+				sByte = sByte - ByteRange - ByteOne;
+			Byte = sByte + ByteOne;
+			Offset++;
+			if (Offset > ByteRange)
+				Offset = ByteMin;
+		}
+	}
+
 	HRESULT ObfuscateIStream(IStream* pOutStream)
 	{
-		/* Omitted */
-		return S_OK;
+		static const auto buffersize = 1024;
+
+		ULARGE_INTEGER StreamCurrent = { 0 }, StreamSize;
+		HRESULT hr = pOutStream->Seek({ 0 }, STREAM_SEEK_CUR, &StreamSize);
+		BYTE* Buffer = NULL;
+		unsigned char Offset = ByteMin;
+
+		if (SUCCEEDED(hr))
+		{
+			hr = pOutStream->Seek({ 0 }, STREAM_SEEK_SET, NULL);
+			Buffer = new BYTE[buffersize]();
+		}
+
+		while (SUCCEEDED(hr) && StreamCurrent.QuadPart < StreamSize.QuadPart)
+		{
+			ULONG BytesWritten = 0, BytesRead = 0;
+
+			SecureZeroMemory(Buffer, buffersize);
+			hr = pOutStream->Read(Buffer, buffersize, &BytesRead);
+			for (uint32_t i = 0; i < BytesRead; i++)
+				ObfuscateByte(Buffer[i], Offset);
+
+			if (SUCCEEDED(hr))
+			{
+				// Roll back read operation so we can write
+				LARGE_INTEGER Offset; Offset.QuadPart = -static_cast<LONG>(BytesRead);
+				hr = pOutStream->Seek(Offset, STREAM_SEEK_CUR, NULL);
+			}
+			if (SUCCEEDED(hr))
+				hr = pOutStream->Write(Buffer, BytesRead, &BytesWritten);
+
+			StreamCurrent.QuadPart += buffersize;
+		}
+
+		if (Buffer)
+		{
+			delete[] Buffer;
+			Buffer = NULL;
+		}
+		return hr;
 	}
 
 	HRESULT DeobfuscateResource(BYTE* ResourceBytes, const DWORD imageFileSize, BYTE* OutputBytes)
 	{
-		/* Omitted */
+		for (uint32_t i = 0; i < imageFileSize; i++)
+		{
+			BYTE Byte = ResourceBytes[i];
+			if (IsByteObfuscatable(Byte))
+				Byte = ~Byte;
+			OutputBytes[i] = Byte;
+		}
 		return S_OK;
 	}
 
 	HRESULT IsValidJPG(BYTE* Bytes, const DWORD NumBytes)
 	{
-		/* Omitted */
-		return S_OK;
+		if (NumBytes < 5)
+			return E_FAIL;
+
+		return Bytes[0] == 0xFF && Bytes[1] == 0xD8 && Bytes[NumBytes - 2] == 0xFF && Bytes[NumBytes - 1] == 0xD9 ? S_OK : E_FAIL;
 	}
 }
 
@@ -154,7 +236,8 @@ HRESULT PrepareResource(BYTE** pResource, DWORD& imageFileSize)
 			*pResource = NULL;
 		}
 	}
-	FreeResource(imageResDataHandle);
+	if (imageResDataHandle)
+		FreeResource(imageResDataHandle);
 	return hr;
 }
 
@@ -207,7 +290,7 @@ MapDialog::~MapDialog()
 	EditorMap = NULL;
 }
 
-HERROR MapDialog::PrepareRawImage(BYTE** pDeobfuscatedResource, ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const bool bIsDDS)
+HERROR MapDialog::PrepareRawImage(BYTE** pDeobfuscatedResource, ComPtr<IWICFormatConverter>& pConverter, const DWORD imageFileSize, const GUID& format)
 {
 	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
 	ComPtr<IWICStream> pResourceStream;
@@ -242,10 +325,10 @@ HERROR MapDialog::PrepareRawImage(BYTE** pDeobfuscatedResource, ComPtr<IWICForma
 
 	MAKE_HR(hr);
 
-	// Convert the image format to 32bppPBGRA
-	// (DXGI_FORMAT_B8G8R8A8_UNORM + D2D1_ALPHA_MODE_PREMULTIPLIED).
+	// Convert the image format to 32bppBGR for both DDS and JPG
+	// (DXGI_FORMAT_B8G8R8A8_UNORM + D2D1_ALPHA_MODE_IGNORE).
 	if (SUCCEEDED(hr.first))
-		hr.first = pConverter->Initialize(pRawImage.Get(), bIsDDS ? GUID_WICPixelFormat32bppBGR : GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0.f, bIsDDS ? WICBitmapPaletteTypeMedianCut : WICBitmapPaletteTypeCustom);
+		hr.first = pConverter->Initialize(pRawImage.Get(), format, WICBitmapDitherTypeNone, NULL, 0.f, format.Data4 == GUID_WICPixelFormat32bppBGR.Data4 ? WICBitmapPaletteTypeMedianCut : WICBitmapPaletteTypeCustom);
 
 	MAKE_HR(hr);
 
@@ -266,7 +349,9 @@ void MapDialog::PrepareMapDDS()
 
 		// Convert JPG to raw image
 		if (SUCCEEDED(hr.first))
-			hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize);
+			hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize, GUID_WICPixelFormat32bppBGR);
+
+		MAKE_HR(hr);
 	}
 
 	// Encode and save DDS
@@ -290,46 +375,76 @@ void MapDialog::PrepareMapDDS()
 			DDSParams.Width = JPGWidth;
 			DDSParams.MipLevels = 1;
 		}
+
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = m_IWICFactory->CreateStream(pOutStream.GetAddressOf());
+
+		MAKE_HR(hr);
 
 		if (SUCCEEDED(hr.first))
 			hr.first = FindAndCreateAppFolder();
 
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = pOutStream->InitializeFromFilename(m_MapDDSPath.c_str(), GENERIC_WRITE | GENERIC_READ);
+
+		MAKE_HR(hr);
 
 		if (SUCCEEDED(hr.first))
 			hr.first = m_IWICFactory->CreateEncoder(GUID_ContainerFormatDds, NULL, pBitMapEncoder.GetAddressOf());
 
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = pBitMapEncoder->Initialize(pOutStream.Get(), WICBitmapEncoderNoCache);
+
+		MAKE_HR(hr);
 
 		if (SUCCEEDED(hr.first))
 			hr.first = pBitMapEncoder.As(&pDDSEncoder);
 
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = pDDSEncoder->SetParameters(&DDSParams);
 	
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 		{
 			UINT ArrayIndex = UINT_MAX, MipLevelIndex = UINT_MAX, SliceIndex = UINT_MAX;
 			hr.first = pDDSEncoder->CreateNewFrame(pDDSFrame.GetAddressOf(), &ArrayIndex, &MipLevelIndex, &SliceIndex);
 		}
+
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = pDDSFrame->Initialize(NULL);
+
+		MAKE_HR(hr);
 
 		if (SUCCEEDED(hr.first))
 			hr.first = pDDSFrame->WriteSource(pRawImage.Get(), NULL);
 
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = pDDSFrame->Commit();
+
+		MAKE_HR(hr);
 
 		if (SUCCEEDED(hr.first))
 			hr.first = pBitMapEncoder->Commit();
 
+		MAKE_HR(hr);
+
 		if (SUCCEEDED(hr.first))
 			hr.first = Obfuscate::ObfuscateIStream(pOutStream.Get());
+
+		MAKE_HR(hr);
 
 		if (pDeobfuscatedResource)
 		{
@@ -338,7 +453,16 @@ void MapDialog::PrepareMapDDS()
 		}
 	}
 
-	LOG(L"Map : PrepareMapDDS thread finished " + std::wstring(SUCCEEDED(hr.first) ? L"successfully" : L"failed") + L"!\n");
+	if (FAILED(hr.first)) 
+	{
+		std::wstring hrstr(64, '\0');
+		HRToStr(hr.first, hrstr);
+		hrstr += WidenStr(hr.second);
+		size_t sz = hrstr.size() + 64;
+		std::wstring buffer(sz, '\0');
+		buffer.resize(swprintf(&buffer[0], sz, GLOB_STRS[62].c_str(), hrstr.c_str()));
+		MessageBox(hDialog, buffer.c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
+	}
 
 	if (SUCCEEDED(hr.first))
 		hr.first = IsMapDDSValid() ? S_OK : E_FAIL;
@@ -353,29 +477,54 @@ void MapDialog::PrepareMapDDS()
 HERROR MapDialog::LoadJPG()
 {
 	HERROR hr = { S_OK, std::string(s_eSz, '\0') };
+
 	ComPtr<IWICFormatConverter> pRawImage;
 	BYTE* pDeobfuscatedResource = NULL;
 	DWORD imageFileSize;
 
+	// If the rendertarget isn't valid, exit here
+	if (!m_MapRenderTarget)
+		hr.first = E_FAIL;
+
 	// Lock and allocate resource
-	hr.first = PrepareResource(&pDeobfuscatedResource, imageFileSize);
+	if (SUCCEEDED(hr.first))
+		hr.first = PrepareResource(&pDeobfuscatedResource, imageFileSize);
 
 	MAKE_HR(hr);
 
 	// Convert JPG to raw image
 	if (SUCCEEDED(hr.first))
-		hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize, FALSE);
-
-	// If the rendertarget isn't valid, exit here
-	if (SUCCEEDED(hr.first) && !m_MapRenderTarget)
-		hr.first = E_FAIL;
+		hr = PrepareRawImage(&pDeobfuscatedResource, pRawImage, imageFileSize, GUID_WICPixelFormat32bppBGR);
 
 	MAKE_HR(hr);
+
+	if (dbglog)
+	{
+		WICPixelFormatGUID pPixelFormat;
+		HRESULT hrpf = pRawImage->GetPixelFormat(&pPixelFormat);
+		if (SUCCEEDED(hrpf))
+		{
+			std::wstring FormatStr;
+			for (int32_t i = 0; i < 8; i++)
+				FormatStr += WidenStr(ToHexStr(pPixelFormat.Data4[i]));
+
+			LOG(L"Map : LoadJPG - Image Pixelformat GUID: " + WidenStr(ToHexStr(pPixelFormat.Data1)) + L"-" + WidenStr(ToHexStr(pPixelFormat.Data2)) + L"-" + WidenStr(ToHexStr(pPixelFormat.Data3)) + L"-" + FormatStr + L"\n");
+		}
+		else
+			LOG(L"Map : LoadJPG - Could not get pixel format, HRESULT code: " + std::to_wstring(hrpf) + L".\n");
+	}
 
 	if (SUCCEEDED(hr.first))
 		hr.first = m_MapRenderTarget->CreateBitmapFromWicBitmap(pRawImage.Get(), NULL, m_MapBitmap.ReleaseAndGetAddressOf());
 
 	MAKE_HR(hr);
+
+	// Free memory. We can't do this earlier because pRawImage actually points to this
+	if (pDeobfuscatedResource)
+	{
+		delete[] pDeobfuscatedResource;
+		pDeobfuscatedResource = NULL;
+	}
 
 	// Update the map
 	if (SUCCEEDED(hr.first))
@@ -580,13 +729,15 @@ HERROR MapDialog::CreateDeviceResources()
 	D2D1_RENDER_TARGET_PROPERTIES renderTargetProperties = D2D1::RenderTargetProperties();
 	{
 		// Get system DPI
-		FLOAT dpi_x, dpi_y;
+		FLOAT dpi_x = 0, dpi_y = 0;
 		if (SUCCEEDED(hr.first))
 			hr.first = m_D2DFactory->ReloadSystemMetrics();
 
 		if (SUCCEEDED(hr.first))
+#pragma warning(push)
+#pragma warning(disable : 4996) // GetDesktopDpi is deprecated.
 			m_D2DFactory->GetDesktopDpi(&dpi_x, &dpi_y);
-
+#pragma warning(pop)
 		// Create a pixel format and initial its format
 		// and alphaMode fields.
 		D2D1_PIXEL_FORMAT pixelFormat = D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE);
@@ -596,8 +747,8 @@ HERROR MapDialog::CreateDeviceResources()
 		renderTargetProperties.dpiX = dpi_x;
 		renderTargetProperties.dpiY = dpi_y;
 		renderTargetProperties.pixelFormat = pixelFormat;
-
 		MAKE_HR(hr);
+		
 	}
 
 	if (SUCCEEDED(hr.first))
@@ -632,16 +783,26 @@ HERROR MapDialog::CreateDeviceResources()
 	// Load and convert bitmap
 	if (SUCCEEDED(hr.first))
 	{
-		// On Windows 7 and below, we skip block compression
-		if (IsWindows8OrGreater())
+		HRESULT hrdds = S_OK;
+		// If DDS is implemented, this will succeed. Narrow scope, because we don't actually care about the object.
 		{
+			ComPtr<IWICBitmapEncoder> pBitMapEncoder;
+			hrdds = m_IWICFactory->CreateEncoder(GUID_ContainerFormatDds, NULL, pBitMapEncoder.GetAddressOf());
+		}
+
+		if (SUCCEEDED(hrdds))
+		{
+			LOG(L"Map : DDS feature support detected. Loading DDS\n");
 			if (IsMapDDSValid())
 				hr = LoadDDS();
 			else
 				std::thread(&MapDialog::PrepareMapDDS, this).detach();
 		}
 		else
+		{
+			LOG(L"Map : DDS not implemented. Loading JPG directly\n");
 			hr = LoadJPG();
+		}
 	}
 
 	MAKE_HR(hr);
@@ -868,7 +1029,7 @@ void MapDialog::UpdateAllMapObjects(bool bForceReRender)
 	// Add Carparts that have a transform
 	m_SidebarItems.push_back(SidebarListEntry(1, UINT_MAX, s_MapSidebarListEntryHeight * ++offset, FALSE));
 	for (uint32_t i = 0; i < carparts.size(); i++)
-		if (EntryExists(carparts[i].name) >= 0)
+		if (FindVariable(carparts[i].name) >= 0)
 			m_SidebarItems.push_back(SidebarListEntry(1, i, UINT_MAX, FALSE));
 
 	// Add Rest
@@ -877,7 +1038,7 @@ void MapDialog::UpdateAllMapObjects(bool bForceReRender)
 		m_SidebarItems.push_back(SidebarListEntry(2, i, UINT_MAX, FALSE));
 
 	// Store index to Satsuma transform, used by carparts
-	m_SatsumaTransformIndex = EntryExists(L"cartransform");
+	m_SatsumaTransformIndex = FindVariable(L"cartransform");
 
 	if (bForceReRender)
 	{
@@ -1041,9 +1202,9 @@ HRESULT MapDialog::OnMapRender(HWND hwnd)
 				{
 					// Draw nodes and lines
 					ThisNodePos = RemapMapPosToRenderedMapPos(&ToMapPos(m_MapDistanceNodes[i], rtSize));
-					if (i + 1 < m_MapDistanceNodes.size())
+					if (static_cast<size_t>(i) + 1 < m_MapDistanceNodes.size())
 					{
-						D2D1_POINT_2F NextNodePos = RemapMapPosToRenderedMapPos(&ToMapPos(m_MapDistanceNodes[i + 1], rtSize));
+						D2D1_POINT_2F NextNodePos = RemapMapPosToRenderedMapPos(&ToMapPos(m_MapDistanceNodes[static_cast<size_t>(i) + 1], rtSize));
 						m_MapSceneBrush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
 						m_MapRenderTarget->DrawLine(NextNodePos, ThisNodePos, m_MapSceneBrush.Get(), 2.f);
 						TotalDistance += GetWorldDistanceBetweenTwoMapPoints(&RemapRenderedMapPosToMapPos(&ThisNodePos), &RemapRenderedMapPosToMapPos(&NextNodePos));
@@ -1290,14 +1451,7 @@ void MapDialog::SidebarUpdateScrollbar(uint32_t nPage)
 {
 	RECT rekt;
 	GetClientRect(m_hDialogSidebarList, &rekt);
-
-	SCROLLINFO si = { 0 };
-	si.cbSize = sizeof(si);
-	si.fMask = SIF_DISABLENOSCROLL | SIF_PAGE | SIF_POS | SIF_RANGE;
-	si.nMin = 0;
-	si.nMax = m_SidebarListScrollRange;
-	si.nPage = nPage != UINT_MAX ? nPage : static_cast<UINT>(rekt.bottom);
-	si.nPos = min(m_SidebarListCurrentScrollpos, m_SidebarListScrollRange - static_cast<INT>(m_SidebarListRenderTarget->GetSize().height));
+	SCROLLINFO si = { sizeof(SCROLLINFO) , SIF_DISABLENOSCROLL | SIF_PAGE | SIF_POS | SIF_RANGE , 0 , m_SidebarListScrollRange , nPage != UINT_MAX ? nPage : static_cast<UINT>(rekt.bottom) , min(m_SidebarListCurrentScrollpos, m_SidebarListScrollRange - static_cast<INT>(m_SidebarListRenderTarget->GetSize().height)) , 0 };
 	SetScrollInfo(m_hDialogSidebarList, SB_VERT, &si, TRUE);
 }
 
@@ -1402,7 +1556,7 @@ D2D1_POINT_2F MapDialog::GetSidebarItemLocation(const SidebarListEntry* entry) c
 			else if (iCorner != UINT_MAX && !variables[iCorner].value.empty())
 				bin = variables[m_SatsumaTransformIndex].value;
 			else
-				bin = variables[EntryExists(carparts[entry->m_Index].name)].value;
+				bin = variables[FindVariable(carparts[entry->m_Index].name)].value;
 		}
 		break;
 	case SidebarListEntry::Misc:

@@ -14,7 +14,7 @@ void BitMask::SetFlag(uint64_t i, bool b)
 
 ListParam::ListParam(int flags_, uint32_t index)
 {
-	flags = (index << 3);
+	flags = (static_cast<uint64_t>(index) << 3);
 	flags |= flags_;
 }
 
@@ -26,7 +26,7 @@ uint64_t ListParam::GetIndex()
 void ListParam::SetIndex(uint32_t index)
 {
 	flags &= 7;
-	flags |= (index << 3);
+	flags |= (static_cast<uint64_t>(index) << 3);
 }
 // =======================
 // Header helper functions
@@ -114,7 +114,7 @@ std::wstring Header::GetContainerTypeDisplayString() const
 
 Header::Header(const std::string &valuestr, uint32_t &HeaderSize)
 {
-	uint32_t offset = 1;
+	size_t offset = 1;
 	if (valuestr[0] != char(-1))
 	{
 		containertype = valuestr[0];
@@ -125,13 +125,13 @@ Header::Header(const std::string &valuestr, uint32_t &HeaderSize)
 		keytype = *reinterpret_cast<const uint32_t*>(&valuestr[offset]);
 		offset += 4;
 	}
-	if (offset + 4 < valuestr.size())
+	if ( offset + 4 < valuestr.size())
 	{
 		valuetype = *reinterpret_cast<const uint32_t*>(&valuestr[offset]);
 		offset += 4;
 		if (IsContainer())
 		{
-			const uint32_t psz = GetContainerKeyType() == EntryValue::Null ? 1 : 2;
+			const uint64_t psz = GetContainerKeyType() == EntryValue::Null ? 1 : 2;
 			if (offset + psz < valuestr.size())
 			{
 				properties = valuestr.substr(offset, psz);
@@ -143,7 +143,7 @@ Header::Header(const std::string &valuestr, uint32_t &HeaderSize)
 				return;
 			}
 		}
-		HeaderSize = offset;
+		HeaderSize = static_cast<uint32_t>(offset);
 		return;
 	}
 	HeaderSize = UINT_MAX;
@@ -175,6 +175,11 @@ bool Variable::IsRemoved() const
 	return (flags & VAR_REMOVED) == VAR_REMOVED;
 }
 
+bool Variable::IsRenamed() const
+{
+	return (flags & VAR_RENAMED) == VAR_RENAMED;
+}
+
 void Variable::SetModified(bool b)
 {
 	b ? flags |= VAR_MODIFIED : flags &= ~VAR_MODIFIED;
@@ -188,6 +193,37 @@ void Variable::SetAdded(bool b)
 void Variable::SetRemoved(bool b)
 {
 	b ? flags |= VAR_REMOVED : flags &= ~VAR_REMOVED;
+}
+
+void Variable::SetRenamed(bool b)
+{
+	b ? flags |= VAR_RENAMED : flags &= ~VAR_RENAMED;
+}
+
+void Variable::SetRawKey(std::wstring s)
+{
+	if (raw_key == s)
+		return;
+	if (static_raw_key.empty())
+		static_raw_key = raw_key;
+	else if (static_raw_key == s)
+		return ResetRawKey();
+
+	raw_key = s;
+
+	key = *SanitizeTagStr(s);
+	SetRenamed(TRUE);
+}
+
+
+void Variable::ResetRawKey()
+{
+	if (static_raw_key.empty())
+		return;
+	raw_key = static_raw_key;
+	key = *SanitizeTagStr(static_raw_key);
+	static_raw_key.clear();
+	SetRenamed(FALSE);
 }
 
 std::wstring Variable::GetDisplayString() const
@@ -211,7 +247,7 @@ std::wstring Variable::ValueBinToStr(const std::string &value, const uint32_t &t
 	switch (type)
 	{
 	case EntryValue::Float:
-		return StringToWString(*TruncFloatStr(BinToFloatStr(value)));
+		return *TruncFloatStr(BinToFloatStr(value));
 	case EntryValue::Bool:
 		return bools[(value.c_str())[0]];
 	case EntryValue::Color:
@@ -255,7 +291,7 @@ Item::Item(std::wstring displayname, std::wstring name, std::vector<char> attrib
 	else
 		m_ID = std::move(id);
 
-	m_layer = char(layer.size()) + WStringToString(layer);
+	m_layer = char(layer.size()) + layer;
 
 	for (uint32_t i = 0; i < attributes.size(); i++)
 	{

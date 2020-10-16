@@ -1,16 +1,18 @@
 #include "utils.h"
 #include <shlobj.h> //file dialog and getknownfolderpath
 #include "aclapi.h" //ACLs SetEntriesInAcl, EXPLICIT_ACCESS
-//#include <accctrl.h> //EXPLICIT_ACCESS
 #include <algorithm> //sort
 #include <fstream> //file stream input output
 #include <iostream>
 #include <cwctype>
 #include <cctype>
 #include <Urlmon.h>
-#include <locale>
-#include <codecvt>
+#include <map>
 #include <wrl\client.h> // COM Smart pointer
+#include <io.h> // Console
+#include <fcntl.h> // Console
+#include <iostream> // Console
+
 #ifdef _MAP
 #include "map.h"
 #endif /*_MAP*/
@@ -18,6 +20,95 @@
 #undef min
 
 using Microsoft::WRL::ComPtr;
+
+void ParseCommandLine(std::wstring& str, std::vector<std::pair<std::wstring, std::wstring>>& args)
+{
+	for (int32_t i = 0, j = 0;; i++)
+	{
+		bool bEnd = i == str.size();
+		if (str[i] == '-' || bEnd)
+		{
+			if (i > 1)
+			{
+				std::wstring arg, id = str.substr(j + 1, i - j - (bEnd ? 1 : 2));
+				std::size_t found = id.find(wchar_t(32));
+				if (found != std::wstring::npos)
+				{
+					arg = id.substr(found + 1);
+					id.resize(id.size() - arg.size() - 1);
+				}
+				args.push_back(std::pair<std::wstring, std::wstring>(id, arg));
+			}
+			j = i;
+		}
+		if (bEnd)
+			return;
+	}
+}
+
+
+void CommandLineConsole(std::wstring& arg)
+{
+	// Alloc debug console
+	AllocConsole();
+	std::wstring cTitle = Title + L" Debug Console";
+	SetConsoleTitle(cTitle.c_str());
+
+	// Get STDOUT handle
+	HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	int SystemOutput = _open_osfhandle(intptr_t(ConsoleOutput), _O_TEXT);
+	FILE *COutputHandle = _fdopen(SystemOutput, "w");
+
+	// Get STDERR handle
+	HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
+	int SystemError = _open_osfhandle(intptr_t(ConsoleError), _O_TEXT);
+	FILE *CErrorHandle = _fdopen(SystemError, "w");
+
+	// Get STDIN handle
+	HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
+	int SystemInput = _open_osfhandle(intptr_t(ConsoleInput), _O_TEXT);
+	FILE *CInputHandle = _fdopen(SystemInput, "r");
+
+	//make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
+	std::ios::sync_with_stdio(true);
+
+	// Redirect the CRT standard input, output, and error handles to the console
+	freopen_s(&CInputHandle, "CONIN$", "r", stdin);
+	freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
+	freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
+
+	// Move console over to other screen and maximize, if possible
+	HWND hConsole = GetConsoleWindow();
+	SetWindowPos(hConsole, NULL, 3000, 0, 200, 200, SWP_NOSIZE);
+	ShowWindow(hConsole, SW_MAXIMIZE);
+
+	std::wcout << cTitle << L" successfully allocated." << std::endl;
+
+	// Log
+	dbglog = new DebugOutput(L"MSCEditorLog.txt");
+	dbglog->LogNoConsole(L"\n~~~\n\nNEW LOG INSTANCE\n\n~~~\n");
+}
+
+void CommandLineFile(std::wstring& arg)
+{
+	size_t found = arg.find_last_of('\\');
+	if (found != std::string::npos)
+	{
+		// Check if we have an actual file at our hands
+		HANDLE hTest = CreateFile(arg.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, NULL, NULL);
+		if (hTest == INVALID_HANDLE_VALUE)
+			return;
+
+		LARGE_INTEGER fSize;
+		if (!GetFileSizeEx(hTest, &fSize))
+			return;
+
+		CloseHandle(hTest);
+		filename = arg.substr(found + 1);
+		filepath = arg;
+		InitMainDialog(hDialog);
+	}
+}
 
 void AppendPath(std::wstring& path, const wchar_t more[])
 {
@@ -58,8 +149,9 @@ HRESULT FindAndCreateAppFolder()
 
 	// Get path to documents folder
 	LPWSTR wszPath = NULL;
-	if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, NULL, &wszPath)))
-		return E_FAIL;
+	HRESULT hr = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, NULL, &wszPath);
+	if (FAILED(hr))
+		throw EditorException(L"SHGetKnownFolderPath() for \"FOLDERID_Documents\" failed.", hr);
 
 	DocumentFolder = wszPath;
 	AppendPath(DocumentFolder, L"MySummerCar");
@@ -67,7 +159,7 @@ HRESULT FindAndCreateAppFolder()
 	AppendPath(AppFolder, L"MSCEditor");
 	CoTaskMemFree(wszPath);
 
-	// Does the directory exist
+	// Does the directory exist?
 	DWORD dwAttr = GetFileAttributes(AppFolder.c_str());
 	bool bFolderExists = dwAttr != 0xffffffff && (dwAttr & FILE_ATTRIBUTE_DIRECTORY);
 
@@ -80,7 +172,7 @@ HRESULT FindAndCreateAppFolder()
 			return S_OK;
 		}
 		else if (!RemoveDirectory(AppFolder.c_str()))
-			return E_FAIL;
+			throw EditorException(&(std::wstring(L"Directory \"") + AppFolder + std::wstring(L"\" exists but is not writable."))[0], GetLastError());
 	}
 
 	// If it doesn't exist or isn't writable we recreate folder
@@ -88,7 +180,7 @@ HRESULT FindAndCreateAppFolder()
 	PSID pEveryoneSID = NULL;
 	SID_IDENTIFIER_AUTHORITY SIDAuthWorld = SECURITY_WORLD_SID_AUTHORITY;
 	if (!AllocateAndInitializeSid(&SIDAuthWorld, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &pEveryoneSID))
-		return E_FAIL;
+		throw EditorException(L"SID allocation failed.", GetLastError());
 
 	// Initialize an EXPLICIT_ACCESS structure for the access control entry
 	// The ACE will allow all users access to files & folders
@@ -105,20 +197,21 @@ HRESULT FindAndCreateAppFolder()
 
 	// Create ACL that contains the new ACE
 	PACL pACL = NULL;
-	if (SetEntriesInAcl(1, &ea, NULL, &pACL) != ERROR_SUCCESS)
-		return E_FAIL;
+	DWORD er = SetEntriesInAcl(1, &ea, NULL, &pACL);
+	if (er != ERROR_SUCCESS)
+		throw EditorException(L"ACL creation failed.", er);
 
 	// Allocate and initialize security descriptor
-	PSECURITY_DESCRIPTOR pSD = (PSECURITY_DESCRIPTOR)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY, SECURITY_DESCRIPTOR_MIN_LENGTH);
+	PSECURITY_DESCRIPTOR pSD = (PSECURITY_DESCRIPTOR)HeapAlloc(GetProcessHeap(), HEAP_NO_SERIALIZE | HEAP_GENERATE_EXCEPTIONS | HEAP_ZERO_MEMORY, SECURITY_DESCRIPTOR_MIN_LENGTH);
 	if (pSD == NULL)
-		return E_FAIL;
+		throw EditorException(L"Security descriptor allocation failed.", reinterpret_cast<uint64_t>(pSD));
 	
 	if (!InitializeSecurityDescriptor(pSD, SECURITY_DESCRIPTOR_REVISION))
-		return E_FAIL;
+		throw EditorException(L"Security descriptor initialization failed.", GetLastError());
 
 	// Add ACL to security descriptor
 	if (!SetSecurityDescriptorDacl(pSD, TRUE, pACL, FALSE))
-		return E_FAIL;
+		throw EditorException(L"ACL placing failed.", GetLastError());
 
 	// Initialize security attributes structure
 	SECURITY_ATTRIBUTES sa;
@@ -127,14 +220,19 @@ HRESULT FindAndCreateAppFolder()
 	sa.lpSecurityDescriptor = pSD;
 	sa.bInheritHandle = FALSE;
 
-	if (!CreateDirectory(DocumentFolder.c_str(), &sa) && GetLastError() != ERROR_ALREADY_EXISTS)
-		return E_FAIL;
+	BOOL bResult = CreateDirectory(DocumentFolder.c_str(), &sa) || GetLastError() == ERROR_ALREADY_EXISTS;
 
-	if (!CreateDirectory(AppFolder.c_str(), &sa) && GetLastError() != ERROR_ALREADY_EXISTS)
-		return E_FAIL;
+	if (bResult)
+		bResult = CreateDirectory(AppFolder.c_str(), &sa) || GetLastError() == ERROR_ALREADY_EXISTS;
 
-	if (!IsFolderWritable(AppFolder))
-		return E_FAIL;
+	if (bResult)
+		bResult = IsFolderWritable(AppFolder);
+		
+	if (!bResult)
+		throw EditorException(&(std::wstring(L"Failed creating directory \"") + AppFolder + std::wstring(L"\". No write access."))[0], GetLastError());
+
+	if (!HeapFree(GetProcessHeap(), 0, pSD))
+		throw EditorException(L"Failed freeing memory", GetLastError());
 
 	appfolderpath = AppFolder;
 	return S_OK;
@@ -225,11 +323,11 @@ BOOL CheckUpdate(std::wstring &file, std::wstring &apppath, std::wstring &change
 		for (uint32_t i = 0; (i + 1) < strs.size(); i++)
 		{
 			if ((strs[i]) == "changelog")
-				changelog = StringToWString(strs[i + 1]);
+				changelog = WidenStr(strs[i + 1]);
 			if ((strs[i]) == "path1")
-				apppath = StringToWString(strs[i + 1]);
+				apppath = WidenStr(strs[i + 1]);
 			if ((strs[i]) == "version")
-				up2date = !IsRemoteVersionNewer(WStringToString(Version), strs[i + 1]);
+				up2date = !IsRemoteVersionNewer(NarrowStr(Version), strs[i + 1]);
 		}
 	}
 	SetFileAttributes(file.c_str(), FILE_ATTRIBUTE_NORMAL);
@@ -411,8 +509,8 @@ int CompareBolts(const std::wstring &str1, const std::wstring &str2)
 	if (pos != std::string::npos)
 	{
 
-		bolts1 = static_cast<int>(::strtol(WStringToString(str1.substr(0, pos - 1)).c_str(), NULL, 10));
-		maxbolts1 = static_cast<int>(::strtol(WStringToString(str1.substr(pos + 1)).c_str(), NULL, 10));
+		bolts1 = static_cast<int>(::strtol(NarrowStr(str1.substr(0, pos - 1)).c_str(), NULL, 10));
+		maxbolts1 = static_cast<int>(::strtol(NarrowStr(str1.substr(pos + 1)).c_str(), NULL, 10));
 		diff1 = maxbolts1 - bolts1;
 	}
 	else if (str2.size() > 1) return 1;
@@ -420,8 +518,8 @@ int CompareBolts(const std::wstring &str1, const std::wstring &str2)
 	pos = str2.find('/');
 	if (pos != std::string::npos)
 	{
-		bolts2 = static_cast<int>(::strtol(WStringToString(str2.substr(0, pos - 1)).c_str(), NULL, 10));
-		maxbolts2 = static_cast<int>(::strtol(WStringToString(str2.substr(pos + 1)).c_str(), NULL, 10));
+		bolts2 = static_cast<int>(::strtol(NarrowStr(str2.substr(0, pos - 1)).c_str(), NULL, 10));
+		maxbolts2 = static_cast<int>(::strtol(NarrowStr(str2.substr(pos + 1)).c_str(), NULL, 10));
 		diff2 = maxbolts2 - bolts2;
 	}
 	else return str1.size() > 1 ? -1 : 0;
@@ -495,6 +593,27 @@ LVITEM GetGroupEntry(const uint32_t &group)
 	return lvi;
 }
 
+void UpdateChangeCounter()
+{
+	//count number of changes made to file
+
+	uint32_t num = 0;
+	for (uint32_t i = 0; i < variables.size(); i++)
+		if (variables[i].IsModified() || variables[i].IsAdded() || variables[i].IsRemoved() || variables[i].IsRenamed())
+			num++;
+
+	// Enable menues when changes were made or if file got deleted
+	HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
+	num > 0 || filedate.wYear == 0xcccc ? EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED) : EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
+
+	//Update change counter
+
+	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT3), hDialog);
+	std::wstring buffer(128, '\0');
+	swprintf(&buffer[0], 128, GLOB_STRS[11].c_str(), num, num == 1 ? L"" : L"s");
+	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)&buffer[0]);
+}
+
 bool DatesMatch(SYSTEMTIME stUTC)
 {
 	if (bFiledateinit)
@@ -514,7 +633,7 @@ bool DatesMatch(SYSTEMTIME stUTC)
 bool FileChanged()
 {
 	SYSTEMTIME stUTC;
-	GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC);
+	bool bFileExists = GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC);
 
 	if (!DatesMatch(stUTC))
 	{
@@ -525,6 +644,8 @@ bool FileChanged()
 			case IDNO:
 			{
 				filedate = stUTC;
+				if (!bFileExists)
+					UpdateChangeCounter();
 				break;
 			}
 			case IDYES:
@@ -550,11 +671,8 @@ bool FileChanged()
 	return FALSE;
 }
 
-void OpenFileDialog()
+void OpenFileDialog(std::wstring &fpath, std::wstring &fname)
 {
-	std::wstring fpath;
-	std::wstring fname;
-
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	if (SUCCEEDED(hr))
 	{
@@ -571,7 +689,7 @@ void OpenFileDialog()
 			{
 				ComPtr<IShellItem> pDefaultFolder;
 				std::wstring defaultpath = pszFilePath;
-				defaultpath += _T("\\Amistech\\My Summer Car\\");
+				defaultpath += L"\\Amistech\\My Summer Car\\";
 				if (SUCCEEDED(SHCreateItemFromParsingName((PCWSTR)defaultpath.c_str(), NULL, IID_PPV_ARGS(pDefaultFolder.ReleaseAndGetAddressOf()))))
 					pFileOpen->SetDefaultFolder(pDefaultFolder.Get());
 				CoTaskMemFree(pszFilePath);
@@ -601,14 +719,18 @@ void OpenFileDialog()
 				}
 			}
 		}
-		if (!fpath.empty() && !fname.empty())
-		{
-			filepath = fpath;
-			filename = fname;
-			InitMainDialog(hDialog);
-		}
 	}
 	CoUninitialize();
+}
+
+void ReloadLists()
+{
+	HWND hList1 = GetDlgItem(hDialog, IDC_List);
+	HWND hList2 = GetDlgItem(hDialog, IDC_List2);
+	FreeLPARAMS(hList1);
+	SendMessage(hList1, LVM_DELETEALLITEMS, 0, 0);
+	SendMessage(hList2, LVM_DELETEALLITEMS, 0, 0);
+	indextable.clear();
 }
 
 void UnloadFile()
@@ -635,11 +757,11 @@ void UnloadFile()
 	ListView_DeleteColumn(hList2, 0);
 
 	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT1), hDialog);
-	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT1), WM_SETTEXT, 0, (LPARAM)_T(""));
+	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT1), WM_SETTEXT, 0, (LPARAM)L"");
 	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT2), hDialog);
-	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT2), WM_SETTEXT, 0, (LPARAM)_T(""));
+	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT2), WM_SETTEXT, 0, (LPARAM)L"");
 	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT3), hDialog);
-	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)_T(""));
+	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)L"");
 	entries.clear();
 	variables.clear();
 	indextable.clear();
@@ -752,8 +874,8 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 			std::wstring coords = params[1];
 
 			VectorStrToBin(coords, 3, bin);
-			VectorStrToBin(std::wstring(_T("0,0,0,1")), 4, bin);
-			VectorStrToBin(std::wstring(_T("1,1,1")), 3, bin);
+			VectorStrToBin(std::wstring(L"0,0,0,1"), 4, bin);
+			VectorStrToBin(std::wstring(L"1,1,1"), 3, bin);
 			locations.push_back( 
 				std::pair<std::pair<std::wstring, bool>, std::string> 
 					(std::pair<std::wstring, bool>(params[0], params.size() == 3 ? static_cast<bool>(params[2][0]) : FALSE), bin));
@@ -764,10 +886,10 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 		switch (params.size())
 		{
 			case 5:
-				itemTypes.push_back(Item(params[0], params[1], MakeCharArray(std::wstring(params[2])), WStringToString(params[3]), params[4]));
+				itemTypes.push_back(Item(params[0], params[1], MakeCharArray(std::wstring(params[2])), NarrowStr(params[3]), params[4]));
 				break;
 			case 4:
-				itemTypes.push_back(Item(params[0], params[1], MakeCharArray(std::wstring(params[2])), WStringToString(params[3])));
+				itemTypes.push_back(Item(params[0], params[1], MakeCharArray(std::wstring(params[2])), NarrowStr(params[3])));
 				break;
 		}
 	}
@@ -793,8 +915,8 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 		{
 			std::string param = "";
 			if (params.size() == 3)
-				param = WStringToString(params[2]);
-			partSCs.push_back(SpecialCase(params[0], static_cast<int>(::strtol(WStringToString(params[1]).c_str(), NULL, 10)), param));
+				param = NarrowStr(params[2]);
+			partSCs.push_back(SpecialCase(params[0], static_cast<int>(::strtol(NarrowStr(params[1]).c_str(), NULL, 10)), param));
 		}
 	}
 	else if (identifier == L"Report_Maintenance")
@@ -802,7 +924,7 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 		if (params.size() < 4)
 			return;
 
-		auto datatype = static_cast<uint32_t>(::strtol(WStringToString(params[2]).c_str(), NULL, 10));
+		auto datatype = static_cast<uint32_t>(::strtol(NarrowStr(params[2]).c_str(), NULL, 10));
 		std::string worst = !params[3].empty() ? Variable::ValueStrToBin(params[3], datatype) : "";
 		std::string optimum = !params[4].empty() ? Variable::ValueStrToBin(params[4], datatype) : "";
 
@@ -820,7 +942,7 @@ void FillVector(const std::vector<std::wstring> &params, const std::wstring &ide
 	{
 		if (params.size() >= 2)
 		{
-			bool bSetting = ::strtol(WStringToString(params[1]).c_str(), NULL, 10) == 1;
+			bool bSetting = ::strtol(NarrowStr(params[1]).c_str(), NULL, 10) == 1;
 			if (params[0] == settings[0])
 				bMakeBackup = bSetting;
 			else if (params[0] == settings[1])
@@ -909,6 +1031,291 @@ BOOL LoadDataFile(const std::wstring &datafilename)
 	// Sort lists
 	std::sort(locations.begin(), locations.end(), [](const std::pair<std::pair<std::wstring, bool>, std::string> &a, const std::pair<std::pair<std::wstring, bool>, std::string> &b) -> bool { return a.first.first < b.first.first; });
 	return 0;
+}
+
+// Sets numeric item suffix (id). Assumes the item is valid and has an id. Won't do anything if no id was found
+void SetItemId(Variable* var, const int id, const Item* ItemType)
+{
+	for (uint32_t i = static_cast<uint32_t>(ItemType->GetName().size()); i < var->raw_key.size(); i++)
+		if (isdigit(var->raw_key.at(i)))
+		{
+			std::wstring s = var->raw_key;
+			var->SetRawKey(s.replace(i, std::to_wstring(::strtol((NarrowStr(s.substr(i))).c_str(), NULL, 10)).size(), std::to_wstring(id)));
+			return;
+		}
+}
+
+// Gets numeric item suffix (id). Returns -1 when no id was found
+int GetItemId(const std::wstring& VariableKey, const std::vector<Item>& ItemTypes, const Item* ItemType)
+{
+	uint32_t i = 0;
+	if (ItemType)
+		i = isdigit(ItemType->GetName().back()) ? static_cast<uint32_t>(ItemType->GetName().size()) : 0;
+	else
+		for (auto& cItem : ItemTypes)
+		{
+			if (VariableKey.substr(0, cItem.GetName().size()) == cItem.GetName())
+			{
+				i = static_cast<uint32_t>(cItem.GetName().size());
+				break;
+			}
+		}
+	for (; i < VariableKey.size(); i++)
+		if (isdigit(VariableKey[i]))
+			return static_cast<int>(::strtol((NarrowStr(VariableKey.substr(i))).c_str(), NULL, 10));
+	return -1;
+}
+
+void CleanEmptyItems()
+{
+	uint32_t NumCleanedItems = 0, NumCleanedVariables = 0, NumFixedKeys = 0;
+	std::vector<Item> sortedItemTypes = itemTypes;
+	std::sort(sortedItemTypes.begin(), sortedItemTypes.end(), [](const Item &a, const Item &b) -> bool { return a.GetName().size() > b.GetName().size(); });
+
+	// Find items that were consumed, then find the corresponding group for the item, flag it for deletion and append _cleaned suffix
+	{
+		static std::wstring ConsumedStr = L"Consumed";
+		uint32_t CurrentGroup = 0;
+		std::vector<uint32_t> GroupVariables;
+		bool bIsConsumed = FALSE;
+		for (uint32_t i = 0; i < variables.size(); i++)
+		{
+			Variable& var = variables[i];
+			if (var.group != CurrentGroup)
+			{
+				if (bIsConsumed)
+				{
+					for (auto& index : GroupVariables)
+					{
+						if (variables[index].IsRemoved())
+							continue;
+						variables[index].SetRemoved(TRUE);
+						variables[index].SetRawKey(variables[index].raw_key + L"_Cleaned");
+						UpdateValue(L"", index, variables[index].value);
+						NumCleanedVariables++;
+					}
+					NumCleanedItems++;
+				}
+
+				GroupVariables.clear();
+				bIsConsumed = FALSE;
+				CurrentGroup = var.group;
+			}
+			if (var.raw_key.size() > ConsumedStr.size() && var.raw_key.substr(var.raw_key.size() - ConsumedStr.size()) == ConsumedStr && !var.IsRemoved() && GetItemId(var.raw_key, sortedItemTypes, NULL) > 0)
+				bIsConsumed = *reinterpret_cast<bool*>(&var.value[0]);
+			GroupVariables.push_back(i);
+		}
+	}
+	// Since some entries got renamed, we need to fix up the numeric item suffixes
+	if (NumCleanedItems > 0)
+	{
+		std::vector<std::pair<Item*, uint32_t>> RenamedItemTypes;
+		uint32_t CurrentGroup = -1, id = 1;
+		Item* PreviousItem = NULL;
+		for (uint32_t i = 0; i < variables.size(); i++)
+		{
+			Item* CurrentItem = NULL;
+			std::wstring DEBUG_varname = variables[i].raw_key;
+			for (auto& cItem : sortedItemTypes)
+			{
+				if (variables[i].raw_key.substr(0, cItem.GetName().size()) == cItem.GetName())
+				{
+					CurrentItem = &cItem;;
+					break;
+				}
+			}
+			if (CurrentItem)
+			{
+				if (RenamedItemTypes.empty() || RenamedItemTypes.back().first->GetName() != CurrentItem->GetName())
+					RenamedItemTypes.push_back(std::pair<Item*, uint32_t>(CurrentItem, 0));
+				int ParsedId = GetItemId(variables[i].raw_key, sortedItemTypes, CurrentItem);
+				if (!variables[i].IsRemoved())
+				{
+					if (ParsedId > 0 && PreviousItem && PreviousItem == CurrentItem)
+					{
+						if (CurrentGroup != variables[i].group)
+							id++;
+					}
+					else
+						id = ParsedId < 1 ? 0 : 1;
+					if (ParsedId > 0 && ParsedId != id)
+					{
+						NumCleanedVariables++;
+						NumFixedKeys++;
+						SetItemId(&variables[i], id, CurrentItem);
+					}
+						
+				}
+				else if (PreviousItem != CurrentItem)
+					id = 0;
+				CurrentGroup = variables[i].group;
+
+				if (id > RenamedItemTypes.back().second)
+					RenamedItemTypes.back().second = id;
+			}
+			PreviousItem = CurrentItem;
+		}
+		// adjust itemIDs
+		for (auto& cItemType : RenamedItemTypes)
+		{
+			uint32_t index = FindVariable(cItemType.first->GetNameID());
+			if (index != UINT_MAX)
+			{
+				if (*reinterpret_cast<const int*>(variables[index].value.data()) != cItemType.second)
+				{
+					NumCleanedVariables++;
+					UpdateValue(std::to_wstring(cItemType.second), index);
+				}
+			}
+			else
+			{
+				std::wstring buffer(128, '\0');
+				swprintf(&buffer[0], 128, GLOB_STRS[65].c_str(), cItemType.first->GetName().c_str());
+				MessageBox(hDialog, buffer.c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR);
+			}
+		}
+		SCROLLINFO si = { sizeof(SCROLLINFO) , SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS , 0 , 0 , 0 , 0 , 0 };
+		GetScrollInfo(GetDlgItem(hDialog, IDC_List), SB_VERT, &si);
+
+		PopulateGroups(TRUE, &variables);
+		uint32_t size = GetWindowTextLength(GetDlgItem(hDialog, IDC_FILTER)) + 1;
+		std::wstring str(size, '\0');
+		GetWindowText(GetDlgItem(hDialog, IDC_FILTER), (LPWSTR)str.data(), size);
+		str.resize(size - 1);
+		UpdateList(str);
+		UpdateChangeCounter();
+		ListView_Scroll(GetDlgItem(hDialog, IDC_List), 0, static_cast<int>((static_cast<float>(si.nPos) / static_cast<float>(si.nMax)) * static_cast<float>(HIWORD(static_cast<DWORD>(SendMessage(GetDlgItem(hDialog, IDC_List), LVM_APPROXIMATEVIEWRECT, -1, MAKELPARAM(-1, -1)))))));
+	}
+	std::wstring buffer(256, '\0');
+	swprintf(&buffer[0], 256, GLOB_STRS[64].c_str(), NumCleanedItems, NumFixedKeys, NumCleanedVariables);
+	MessageBox(NULL, buffer.c_str(), Title.c_str(), MB_OK | MB_ICONINFORMATION);
+}
+
+typedef std::pair<uint32_t, uint32_t> vListEntry;
+void CompareVariables(const std::vector <Variable> *v1, const std::vector <Variable> *v2, const COMPDLGRET *options)
+{
+	std::vector<vListEntry> vMissing;		// Missing means the variable is present in v2, but not in v1
+	std::vector<vListEntry> vAdditional;	// Additional means the variable is present in v1, but not in v2
+	std::vector<vListEntry> vIdentical;		// Identical entries exist in both v1 and v1, and are identical
+	std::vector<vListEntry> vDifferent;		// Different entries exist in both v1 and v1, but are different
+
+	std::map <uint32_t, bool> EnabledDatatypes 
+	{ 
+		{ EntryValue::Transform, options->bTransform }, 
+		{ EntryValue::Float, options->bFloat },
+		{ EntryValue::String, options->bString },
+		{ EntryValue::Bool, options->bBoolean },
+		{ EntryValue::Color, options->bColor },
+		{ EntryValue::Integer, options->bInteger },
+		{ EntryValue::Vector3, options->bVector },
+		{ EntryValue::Unknown, options->bUnknown }
+	};
+
+	uint32_t i1 = 0, i2 = 0;
+	while (true)
+	{
+		bool bIsAllowedDatatype1 = EnabledDatatypes.at(v1->at(i1).header.GetValueType());
+		bool bIsAllowedDatatype2 = EnabledDatatypes.at(v2->at(i2).header.GetValueType());
+		bool bNameBlacklisted1 = (!(options->KeyFilter.empty()) && (v1->at(i1).key.find(options->KeyFilter) == std::wstring::npos));
+		bool bNameBlacklisted2 = (!(options->KeyFilter.empty()) && (v2->at(i2).key.find(options->KeyFilter) == std::wstring::npos));
+
+		if (!bIsAllowedDatatype1 || bNameBlacklisted1)
+			i1++;
+		else if (!bIsAllowedDatatype2 || bNameBlacklisted2)
+			i2++;
+		else if (v1->at(i1).key < v2->at(i2).key)
+		{
+			vMissing.push_back(vListEntry(i1, UINT_MAX));
+			i1++;
+		}
+		else if (v1->at(i1).key > v2->at(i2).key)
+		{
+			vAdditional.push_back(vListEntry(UINT_MAX, i2));
+			i2++;
+		}
+		else if (v1->at(i1).key == v2->at(i2).key)
+		{
+			bool bDifferent = TRUE;
+			switch (v1->at(i1).header.GetValueType())
+			{
+			case EntryValue::Float:
+			{
+				bDifferent = std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.data()) - *reinterpret_cast<const float*>(v2->at(i2).value.data())) >= options->FloatDelta;
+				break;
+			}
+			case EntryValue::Transform:
+			{
+				bDifferent =
+				(
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(1, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(1, 4).c_str())) >= options->FloatDelta) ||
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(5, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(5, 4).c_str())) >= options->FloatDelta) ||
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(9, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(9, 4).c_str())) >= options->FloatDelta) ||
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(13, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(13, 4).c_str())) >= options->FloatDelta) ||
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(17, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(17, 4).c_str())) >= options->FloatDelta) ||
+					(std::abs(*reinterpret_cast<const float*>(v1->at(i1).value.substr(21, 4).c_str()) - *reinterpret_cast<const float*>(v2->at(i2).value.substr(21, 4).c_str())) >= options->FloatDelta)
+				);
+				break;
+			}
+			default:
+				bDifferent = (v1->at(i1).value != v2->at(i2).value);
+			}
+
+			if (bDifferent)
+				vDifferent.push_back(vListEntry(i1, i2));
+			else
+				vIdentical.push_back(vListEntry(i1, i2));
+			i1++; i2++;
+		}
+		if (i1 == v1->size())
+		{
+			for (i2; i2 < v2->size(); i2++)
+				if (bIsAllowedDatatype2 && !bNameBlacklisted2)
+					vAdditional.push_back(vListEntry(UINT_MAX, i2));
+			break;
+		}
+		else if (i2 == v2->size())
+		{
+			for (i1; i1 < v1->size(); i1++)
+				if (bIsAllowedDatatype1 && !bNameBlacklisted1)
+					vMissing.push_back(vListEntry(i1, INT_MAX));
+			break;
+		}
+	}
+
+	// Here we assemble the html file. We store it in the app folder path for now. 
+
+	std::wstring htm = appfolderpath + L"\\Result.htm";
+	std::wofstream file(htm, std::wofstream::out, std::wofstream::trunc);
+	if (!file)
+		return;
+
+	file << HtmlHeader << std::endl;
+
+	for (auto& CurrentList : { std::make_pair(&vMissing, L"Missing Entries"), std::make_pair(&vAdditional, L"Additional Entries"), std::make_pair(&vDifferent, L"Different Entries"), std::make_pair(&vIdentical, L"Identical Entries") })
+	{
+		std::wstring buffer(HtmlTableHeader.size() + 64, '\0');
+		int bSz = swprintf(&buffer[0], HtmlTableHeader.size() + 64, HtmlTableHeader.c_str(), CurrentList.second);
+		file << buffer.substr(0, bSz) << std::endl;
+
+		for (vListEntry& ListEntry : *CurrentList.first)
+		{
+			buffer.clear();
+			buffer = std::wstring(256, '\0');
+			bSz = swprintf(&buffer[0], 256, HtmlTableEntry.c_str(), ListEntry.first == UINT_MAX ? v2->at(ListEntry.second).key.c_str() : v1->at(ListEntry.first).key.c_str(), ListEntry.first != UINT_MAX ? v1->at(ListEntry.first).GetDisplayString().c_str() : L"", ListEntry.second != UINT_MAX ? v2->at(ListEntry.second).GetDisplayString().c_str() : L"");
+			file << buffer.substr(0, bSz);
+		}
+		file << L"</table>";
+	}
+		
+	file << HtmlEnd;
+	file.close();
+
+	// We open the html in the default app using shell
+	std::wstring buffer(128, '\0');
+	swprintf(&buffer[0], 128, GLOB_STRS[63].c_str(), htm.c_str());
+
+	if (MessageBox(NULL, buffer.c_str(), ErrorTitle.c_str(), MB_YESNO | MB_ICONINFORMATION) == IDYES)
+		ShellExecute(NULL, L"open", &htm[0], NULL, NULL, SW_SHOWDEFAULT);
 }
 
 void StrGetLine(const std::wstring &target, std::wstring &str, uint32_t &offset, bool truncEOL = FALSE)
@@ -1082,7 +1489,7 @@ int SaveFile()
 		// First we remove the file extension
 
 		std::wstring nfilepath = filepath;
-		found = nfilepath.find_last_of(_T("."));
+		found = nfilepath.find_last_of(L".");
 		if (found == string::npos)
 			found = nfilepath.size() - 1;
 		nfilepath.resize(found);
@@ -1092,7 +1499,17 @@ int SaveFile()
 		if (MoveFileEx(filepath.c_str(), nfilepath.c_str(), MOVEFILE_WRITE_THROUGH) == 0)
 		{
 			DWORD eword = GetLastError();
-			if (eword != ERROR_ALREADY_EXISTS) return 2;
+			if (eword != ERROR_ALREADY_EXISTS)
+			{
+				HANDLE hTest = CreateFile(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, NULL, NULL);
+				if (hTest == INVALID_HANDLE_VALUE)
+					eword = ERROR_SUCCESS; // File doesn't exist, so we just proceed without backup
+				else
+				{
+					CloseHandle(hTest);
+					return 2;
+				}
+			}
 			while (eword == ERROR_ALREADY_EXISTS)
 			{
 				wstring _tmp = to_wstring(stoi(nfilepath.substr(found + 7, 2), nullptr, 10) + 1);
@@ -1146,7 +1563,7 @@ bool IsItemFile()
 	if (!variables.empty())
 	{
 		for (uint32_t i = 0; i < itemTypes.size(); i++)
-			if (EntryExists(itemTypes[i].GetID()) >= 0)
+			if (FindVariable(itemTypes[i].GetNameID()) >= 0)
 			{
 				bIsItemFile = TRUE;
 				break;
@@ -1156,6 +1573,46 @@ bool IsItemFile()
 		bIsItemFile = (filename.find(L"items") != std::string::npos);
 
 	return bIsItemFile;
+}
+
+void LoadLists(HWND hwnd)
+{
+	// Prepare left List
+	{
+		LVCOLUMN lvc;
+		HWND hList = GetDlgItem(hwnd, IDC_List);
+		RECT rekt;
+		GetWindowRect(hList, &rekt);
+		const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
+
+		lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+		lvc.iSubItem = 0; lvc.pszText = L""; lvc.cx = width; lvc.fmt = LVCFMT_LEFT;
+		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+		ListView_SetBkColor(hList, (COLORREF)GetSysColor(COLOR_WINDOW));
+	}
+	// Prepare right list
+	{
+		LVCOLUMN lvc;
+		HWND hList = GetDlgItem(hwnd, IDC_List2);
+		RECT rekt;
+		GetWindowRect(hList, &rekt);
+		const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
+
+		lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+		lvc.iSubItem = 1; lvc.pszText = L"Key"; lvc.cx = 150; lvc.fmt = LVCFMT_LEFT;
+		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+		lvc.iSubItem = 0; lvc.pszText = L"Value"; lvc.cx = (width - 150); lvc.fmt = LVCFMT_LEFT;
+		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
+		ListView_SetBkColor(hList, (COLORREF)GetSysColor(COLOR_WINDOW));
+	}
+	// If a filter is set, we update list
+	{
+		uint32_t size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
+		std::wstring str(size, '\0');
+		GetWindowText(GetDlgItem(hwnd, IDC_FILTER), (LPWSTR)str.data(), size);
+		str.resize(size - 1);
+		UpdateList(str);
+	}
 }
 
 void InitMainDialog(HWND hwnd)
@@ -1170,7 +1627,7 @@ void InitMainDialog(HWND hwnd)
 			return;
 		}
 	}
-	catch (const std::exception& e) { MessageBox(hDialog, (GLOB_STRS[46] + StringToWString(std::string(e.what()))).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR); return; }
+	catch (const std::exception& e) { MessageBox(hDialog, (GLOB_STRS[46] + WidenStr(std::string(e.what()))).c_str(), ErrorTitle.c_str(), MB_OK | MB_ICONERROR); return; }
 
 	SYSTEMTIME stUTC;
 	if (GetLastWriteTime((LPTSTR)filepath.c_str(), stUTC))
@@ -1216,7 +1673,7 @@ void InitMainDialog(HWND hwnd)
 	{
 		static const std::wstring UsersStr = L"\\Users\\";
 		std::wstring TitleStr(128, '\0');
-		swprintf(&TitleStr[0], 128, _T("%s - [%s]"), Title.c_str(), filepath.c_str());
+		swprintf(&TitleStr[0], 128,L"%s - [%s]", Title.c_str(), filepath.c_str());
 		std::string::size_type Found = TitleStr.find(UsersStr);
 		if (Found != std::string::npos)
 		{
@@ -1226,42 +1683,9 @@ void InitMainDialog(HWND hwnd)
 		}
 		SetWindowText(hDialog, (LPCWSTR)TitleStr.c_str());
 	}
-	// Prepare left List
-	{
-		LVCOLUMN lvc;
-		HWND hList = GetDlgItem(hwnd, IDC_List);
-		RECT rekt;
-		GetWindowRect(hList, &rekt);
-		const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
 
-		lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
-		lvc.iSubItem = 0; lvc.pszText = _T(""); lvc.cx = width; lvc.fmt = LVCFMT_LEFT;
-		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
-		ListView_SetBkColor(hList, (COLORREF)GetSysColor(COLOR_WINDOW));
-	}
-	// Prepare right list
-	{
-		LVCOLUMN lvc;
-		HWND hList = GetDlgItem(hwnd, IDC_List2);
-		RECT rekt;
-		GetWindowRect(hList, &rekt);
-		const int width = rekt.right - rekt.left - 4 - GetSystemMetrics(SM_CXVSCROLL);
+	LoadLists(hwnd);
 
-		lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
-		lvc.iSubItem = 1; lvc.pszText = _T("Key"); lvc.cx = 150; lvc.fmt = LVCFMT_LEFT;
-		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
-		lvc.iSubItem = 0; lvc.pszText = _T("Value"); lvc.cx = (width - 150); lvc.fmt = LVCFMT_LEFT;
-		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&lvc);
-		ListView_SetBkColor(hList, (COLORREF)GetSysColor(COLOR_WINDOW));
-	}
-	// If a filter is set, we update list
-	{
-		uint32_t size = GetWindowTextLength(GetDlgItem(hwnd, IDC_FILTER)) + 1;
-		std::wstring str(size, '\0');
-		GetWindowText(GetDlgItem(hwnd, IDC_FILTER), (LPWSTR)str.data(), size);
-		str.resize(size - 1);
-		UpdateList(str);
-	}
 	// Enable menus
 	{
 		HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
@@ -1272,9 +1696,9 @@ void InitMainDialog(HWND hwnd)
 			EnableMenuItem(menu, GetMenuItemID(menu, 0), MF_ENABLED);
 		if (!partIdentifiers.empty())
 			EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED);
-		if (EntryExists(L"keycheck") >= 0)
+		if (FindVariable(L"keysatsuma") >= 0)
 			EnableMenuItem(menu, GetMenuItemID(menu, 2), MF_ENABLED);
-		if (EntryExists(L"worldtime") >= 0)
+		if (FindVariable(L"worldtime") >= 0)
 			EnableMenuItem(menu, GetMenuItemID(menu, 3), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 6), MF_ENABLED);
 		EnableMenuItem(menu, GetMenuItemID(menu, 7), MF_ENABLED);
@@ -1323,7 +1747,7 @@ void HRToStr(int nErrorCode, std::wstring& hrstr)
 {
 	DWORD len = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, nErrorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &hrstr[0], static_cast<DWORD>(hrstr.size()), NULL);
 	if (len == 0)
-		len = swprintf(&hrstr[0], hrstr.size(), _T("Error code %u"), nErrorCode);
+		len = swprintf(&hrstr[0], hrstr.size(), L"Error code %u", nErrorCode);
 	hrstr.resize(len);
 }
 
@@ -1352,9 +1776,7 @@ void OpenMap()
 
 int GetScrollbarPos(HWND hwnd, int bar, uint32_t code)
 {
-	SCROLLINFO si = {};
-	si.cbSize = sizeof(SCROLLINFO);
-	si.fMask = SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS;
+	SCROLLINFO si = { sizeof(SCROLLINFO) , SIF_PAGE | SIF_POS | SIF_RANGE | SIF_TRACKPOS , 0 , 0 , 0 , 0 , 0 };
 	GetScrollInfo(hwnd, bar, &si);
 
 	const int minPos = si.nMin;
@@ -1424,7 +1846,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 					issues.push_back(Issue(carpart.iBolts, BoltsToBin(std::vector<uint32_t>(maxbolts, 0))));
 			}
 			static const std::wstring PartStr = L"PART";
-			const int iTransform = EntryExists(carpart.name);
+			const int iTransform = FindVariable(carpart.name);
 			if (iTransform >= 0)
 			{
 				std::string value = variables[iTransform].value;
@@ -1433,7 +1855,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 			}
 		}
 	}
-	const int iTime = EntryExists(L"worldtime");
+	const int iTime = FindVariable(L"worldtime");
 	if (iTime >= 0)
 	{
 		int time = *reinterpret_cast<const int*>(variables[iTime].value.data());
@@ -1442,7 +1864,7 @@ bool SaveHasIssues(std::vector<Issue> &issues)
 		else if (time % 2 != 0)
 			issues.push_back(Issue(iTime, IntToBin(time + 1)));
 	}
-	const int iDay = EntryExists(L"worldday");
+	const int iDay = FindVariable(L"worldday");
 	if (iDay >= 0)
 	{
 		int day = *reinterpret_cast<const int*>(variables[iDay].value.data());
@@ -1587,7 +2009,7 @@ void PopulateBList(HWND hwnd, const CarPart *part, uint32_t &item, Overview *ov)
 			uint32_t tightness = static_cast<uint32_t>(BinToFloat(variables[part->iTightness].value));
 			TCHAR buffer[32];
 			memset(buffer, 0, 32);
-			swprintf(buffer, 32, _T("%d / %d"), bolts, maxbolts);
+			swprintf(buffer, 32, L"%d / %d", bolts, maxbolts);
 			boltStr = buffer;
 
 			ov->numMaxBolts += maxbolts;
@@ -1616,7 +2038,7 @@ void PopulateBList(HWND hwnd, const CarPart *part, uint32_t &item, Overview *ov)
 					{
 						if (partSCs[j].str == part->name)
 						{
-							int offset = static_cast<int>(::strtol((WStringToString(partSCs[j].param)).c_str(), NULL, 10));
+							int offset = static_cast<int>(::strtol((partSCs[j].param).c_str(), NULL, 10));
 							tightness >= 8 ? tightness += -offset : tightness = 0;
 							break;
 						}
@@ -1741,7 +2163,7 @@ void UpdateBOverview(HWND hwnd, Overview *ov)
 	SendMessage(GetDlgItem(hwnd, statics[6]), WM_SETTEXT, 0, (LPARAM)buffer);
 }
 
-void UpdateParent(const int &group)
+void UpdateParent(const uint32_t &group)
 {
 	HWND hList = GetDlgItem(hDialog, IDC_List);
 	auto max = static_cast<uint32_t>(SendMessage(hList, LVM_GETITEMCOUNT, 0, 0));
@@ -1752,13 +2174,13 @@ void UpdateParent(const int &group)
 		bool modified = FALSE;
 		uint32_t index = UINT_MAX;
 
-		for (uint32_t j = 0; variables[j].group <= (uint32_t)group; j++)
+		for (uint32_t j = 0; j < variables.size(); j++)
 		{
 			if (variables[j].group == group)
 			{
 				if (index == UINT_MAX)
 					index = j;
-				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved())
+				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved() || variables[j].IsRenamed())
 				{
 					modified = TRUE;
 					break;
@@ -1788,32 +2210,6 @@ void UpdateChild(const int &vIndex, std::string &str)
 			break;
 		}
 	}
-}
-
-void UpdateChangeCounter()
-{
-	//count number of changes made to file
-
-	uint32_t num = 0;
-	for (uint32_t i = 0; i < variables.size(); i++)
-	{
-		if (variables[i].IsModified() || variables[i].IsAdded() || variables[i].IsRemoved())
-		{
-			num++;
-		}
-	}
-
-	//Enable menues when changes were made
-
-	HMENU menu = GetSubMenu(GetMenu(hDialog), 0);
-	num > 0 ? EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_ENABLED) : EnableMenuItem(menu, GetMenuItemID(menu, 1), MF_GRAYED);
-
-	//Update change counter
-
-	ClearStatic(GetDlgItem(hDialog, IDC_OUTPUT3), hDialog);
-	std::wstring buffer(128, '\0');
-	swprintf(&buffer[0], 128, GLOB_STRS[11].c_str(), num, num == 1 ? L"" : L"s");
-	SendMessage(GetDlgItem(hDialog, IDC_OUTPUT3), WM_SETTEXT, 0, (LPARAM)&buffer[0]);
 }
 
 void UpdateValue(const std::wstring &viewstr, const int &vIndex, const std::string &bin)
@@ -1874,7 +2270,7 @@ void UpdateList(const std::wstring &str)
 			for (j; j < variables.size(); j++)
 			{
 				if (variables[j].group != i) break;
-				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved())
+				if (variables[j].IsModified() || variables[j].IsAdded() || variables[j].IsRemoved() || variables[j].IsRenamed())
 				{
 					param->SetFlag(VAR_MODIFIED, true);
 					break;
@@ -1986,7 +2382,7 @@ uint32_t VectorStrToBin(const std::wstring &str, const uint32_t &size, std::stri
 	//wrong amount of elements?
 	while (TRUE)
 	{
-		std::string::size_type _i = wstr.substr(found).find(_T(","));
+		std::string::size_type _i = wstr.substr(found).find(L",");
 		if (_i == std::string::npos)
 		{
 			break;
@@ -2011,7 +2407,7 @@ uint32_t VectorStrToBin(const std::wstring &str, const uint32_t &size, std::stri
 		}
 		if (normalized)
 		{
-			float x = static_cast<float>(::strtod(WStringToString(wstr.substr(indizes[i] + 1, indizes[i + 1] - indizes[i] - 1)).c_str(), NULL));
+			float x = static_cast<float>(::strtod(NarrowStr(wstr.substr(indizes[i] + 1, indizes[i + 1] - indizes[i] - 1)).c_str(), NULL));
 			if (allownegative)
 			{
 				if (x > 1 || x < -1) return 5;
@@ -2025,9 +2421,9 @@ uint32_t VectorStrToBin(const std::wstring &str, const uint32_t &size, std::stri
 	if (eulerconvert)
 	{
 		ANGLES a;
-		a.x = ::strtof(WStringToString(wstr.substr(indizes[0] + 1, indizes[1] - indizes[0] - 1)).c_str(), NULL);
-		a.y = ::strtof(WStringToString(wstr.substr(indizes[1] + 1, indizes[2] - indizes[1] - 1)).c_str(), NULL);
-		a.z = ::strtof(WStringToString(wstr.substr(indizes[2] + 1, indizes[3] - indizes[2] - 1)).c_str(), NULL);
+		a.x = ::strtof(NarrowStr(wstr.substr(indizes[0] + 1, indizes[1] - indizes[0] - 1)).c_str(), NULL);
+		a.y = ::strtof(NarrowStr(wstr.substr(indizes[1] + 1, indizes[2] - indizes[1] - 1)).c_str(), NULL);
+		a.z = ::strtof(NarrowStr(wstr.substr(indizes[2] + 1, indizes[3] - indizes[2] - 1)).c_str(), NULL);
 		QTRN q = EulerToQuat(&a);
 
 		if (!QuatEqual(&q, oldq))
@@ -2072,7 +2468,7 @@ void BatchProcessUninstall()
 
 		if (carparts[i].iTightness != UINT_MAX)
 		{
-			UpdateValue(_T("0"), carparts[i].iTightness);
+			UpdateValue(L"0", carparts[i].iTightness);
 		}
 
 		if (carparts[i].iBolts != UINT_MAX)
@@ -2086,7 +2482,7 @@ void BatchProcessUninstall()
 				{
 					boltlist[j] = 0;
 				}
-				UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
+				UpdateValue(L"", carparts[i].iBolts, BoltsToBin(boltlist));
 			}
 		}
 
@@ -2121,7 +2517,7 @@ void BatchProcessStuck()
 						{
 							if (partSCs[j].str == carparts[i].name)
 							{
-								int offset = static_cast<int>(::strtol((WStringToString(partSCs[j].param)).c_str(), NULL, 10));
+								int offset = static_cast<int>(::strtol((partSCs[j].param).c_str(), NULL, 10));
 								boltstate >= 8 ? boltstate += offset : boltstate = 0;
 								break;
 							}
@@ -2188,7 +2584,7 @@ void BatchProcessBolts(bool fix)
 						{
 							if (partSCs[j].id == 0 && partSCs[j].str == carparts[i].name)
 							{
-								int offset = static_cast<int>(::strtol((WStringToString(partSCs[j].param)).c_str(), NULL, 10));
+								int offset = static_cast<int>(::strtol((partSCs[j].param).c_str(), NULL, 10));
 								tightness >= 8 ? tightness += offset : tightness = 0;
 								break;
 							}
@@ -2196,7 +2592,7 @@ void BatchProcessBolts(bool fix)
 					}
 
 					if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[fix], carparts[i].iBolted);
-					UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
+					UpdateValue(L"", carparts[i].iBolts, BoltsToBin(boltlist));
 					UpdateValue(std::to_wstring(tightness), carparts[i].iTightness);
 				}
 			}
@@ -2207,13 +2603,31 @@ void BatchProcessBolts(bool fix)
 void BatchProcessWiring()
 {
 	static const std::wstring WiringIdentifier = L"wiring";
+	static const std::vector<std::wstring> WiringRequirements = { L"wiringbatteryminus", L"wiringbatteryplus", L"wiringstarter"};
+	std::vector<uint32_t> InstalledParts;
+
+	// We don't wire the car when there's no battery or starter installed
+	for (auto& part : carparts)
+		for (auto& str : WiringRequirements)
+			if ((part.name == str) && (part.iBolts == UINT_MAX || part.iTightness == UINT_MAX))
+			{
+				std::wstring buffer(128, '\0');
+				swprintf(&buffer[0], 128, GLOB_STRS[67].c_str(), part.name.substr(WiringIdentifier.size(), std::wstring::npos).c_str());
+				MessageBox(NULL, buffer.c_str(), ErrorTitle.c_str(), MB_ICONERROR | MB_OK);
+				return;
+			}
+
 	for (uint32_t i = 0; i < carparts.size(); i++)
 	{
 		if (StartsWithStr(carparts[i].name, WiringIdentifier))
 		{
-			if (carparts[i].iInstalled != UINT_MAX)
+			if (carparts[i].iInstalled != UINT_MAX && !static_cast<bool>(variables[carparts[i].iInstalled].value[0]))
+			{
 				UpdateValue(bools[TRUE], carparts[i].iInstalled);
-
+				InstalledParts.push_back(i);
+			}
+				
+			// We only set bolted to true when there's also bolts present
 			if (carparts[i].iTightness != UINT_MAX && carparts[i].iBolts != UINT_MAX)
 			{
 				uint32_t bolts = 0, maxbolts = 0;
@@ -2227,12 +2641,20 @@ void BatchProcessWiring()
 					int tightness = static_cast<int32_t>(boltlist.size()) * 8;
 
 					if (carparts[i].iBolted != UINT_MAX) UpdateValue(bools[TRUE], carparts[i].iBolted);
-					UpdateValue(_T(""), carparts[i].iBolts, BoltsToBin(boltlist));
+					UpdateValue(L"", carparts[i].iBolts, BoltsToBin(boltlist));
 					UpdateValue(std::to_wstring(tightness), carparts[i].iTightness);
 				}
 			}
 		}
 	}
+	std::wstring str;
+	for (auto& i : InstalledParts)
+		str.append(carparts[i].name + L"\n");
+
+	size_t sz = str.size() + GLOB_STRS[66].size() + 64;
+	std::wstring str1(sz, '\0');
+	swprintf(&str1[0], sz, GLOB_STRS[66].c_str(), InstalledParts.size(), str.c_str());
+	MessageBox(NULL, str1.c_str(), Title.c_str(), MB_ICONINFORMATION);
 }
 
 bool BinToBolts(const std::string &str, uint32_t &bolts, uint32_t &maxbolts, std::vector<uint32_t> &boltlist)
@@ -2281,12 +2703,8 @@ int Variables_add(Variable var)
 	uint32_t group = UINT_MAX;
 	for (index; index < variables.size(); index++)
 	{
-		std::wstring xname = variables[index].key;
-		std::wstring yname = var.key;
-		transform(xname.begin(), xname.end(), xname.begin(), ::tolower);
-		transform(yname.begin(), yname.end(), yname.begin(), ::tolower);
-		if (xname == yname) return -1;
-		if (xname > yname) break;
+		if (variables[index].key > var.key) break;
+		if (variables[index].key == var.key) return -1;
 	}
 
 	for (uint32_t i = 0; i < 2; i++)
@@ -2478,17 +2896,52 @@ std::wstring BinToFloatVector(const std::string &value, int max, int start)
 	for (int i = start; i < max; i++)
 	{
 		std::wstring astr = BinToFloatStr(value.substr((4 * i), 4));
-		VectorStr.append(*TruncFloatStr(astr) + _T(", "));
+		VectorStr.append(*TruncFloatStr(astr) + L", ");
 	}
 	VectorStr.resize(VectorStr.size() - 2);
 	return VectorStr;
+}
+
+std::wstring* TruncFloatStr(std::wstring& str)
+{
+	std::string out = NarrowStr(str);
+	std::string::size_type found = out.find(".");
+	if (found != std::string::npos)
+	{
+		found = out.find_last_not_of("0\t\f\v\n\r");
+		if (found != std::string::npos)
+		{
+			if (out[found] == 46) found--;
+			out.resize(found + 1);
+		}
+		else
+			out.clear();
+		str = WidenStr(out);
+	}
+	return &str;
+}
+
+std::string NarrowStr(const std::wstring s)
+{
+	static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+	//std::string wsTmp(s.begin(), s.end());
+	std::string wsTmp = converter.to_bytes(s);
+	return wsTmp;
+}
+
+std::wstring WidenStr(const std::string s)
+{
+	static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+	std::wstring wsTmp = converter.from_bytes(s);
+	//std::wstring wsTmp(s.begin(), s.end());
+	return wsTmp;
 }
 
 std::wstring BinStrToWStr(const std::string &str, BOOL bContainsSize)
 {
 	static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 	try { return converter.from_bytes(str.substr(bContainsSize)); }
-	catch (const std::exception& e) { LOG(L"BinStrToWStr: " + StringToWString(std::string(e.what())) + L"\n"); return L""; }
+	catch (const std::exception& e) { LOG(L"BinStrToWStr: " + WidenStr(std::string(e.what())) + L"\n"); return L""; }
 }
 
 std::string WStrToBinStr(const std::wstring &str)
@@ -2496,7 +2949,7 @@ std::string WStrToBinStr(const std::wstring &str)
 	static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
 	std::string out;
 	try { out = converter.to_bytes(str).substr(0, 255); }
-	catch (const std::exception& e) { LOG(L"WStrToBinStr: " + StringToWString(std::string(e.what())) + L"\n"); return "\0"; }
+	catch (const std::exception& e) { LOG(L"WStrToBinStr: " + WidenStr(std::string(e.what())) + L"\n"); return "\0"; }
 	return out.insert(0, 1, char(out.size()));
 }
 
@@ -2542,7 +2995,7 @@ uint32_t ParseItemID(const std::wstring &str, const uint32_t sIndex)
 	return ItemID == 0 ? UINT_MAX : ItemID;
 }
 
-BOOL EntryExists(const std::wstring &str, const bool bConvert2Lower)
+BOOL FindVariable(const std::wstring &str, const bool bConvert2Lower)
 {
 	if (variables.empty())
 		return -1;
@@ -2568,6 +3021,54 @@ BOOL EntryExists(const std::wstring &str, const bool bConvert2Lower)
 		return startindex;
 
 	return -1;
+}
+
+std::wstring GetItemPrefix(const std::wstring& VariableKey, const std::vector<Item>* SortedItemTypes)
+{
+	for (auto& item : *SortedItemTypes)
+	{
+		std::wstring name = *SanitizeTagStr(item.GetName());
+		if (VariableKey.substr(0, name.size()) == name)
+			for (auto i = static_cast<uint32_t>(name.size()); i < VariableKey.size(); i++)
+				if (!isdigit(VariableKey[i]))
+					return VariableKey.substr(0, i);
+	}
+	return std::wstring();
+}
+
+// This function is responsible of pooling variables into groups. Variables of the same group will be shown in the list on the right when selected
+// Called after parsing the file, and also when we need to resort the list after variabels have been renamed (e.g. CLeanItems)
+uint32_t PopulateGroups(bool bRequiresSort,  std::vector<Variable> *pvariables)
+{
+	if(bRequiresSort)
+		std::sort(pvariables->begin(), pvariables->end(), [](const Variable &a, const Variable &b) -> bool { return a.key < b.key; });
+
+	uint32_t group = UINT_MAX;
+	bool bIsItemFile = IsItemFile();
+	std::wstring previous_extract(1, '\0');
+	std::vector<Item> sortedItemTypes;
+	entries.clear();
+
+	if (bIsItemFile)
+	{
+		// we sort by longest itemnames here to avoid substring issues when grouping
+		sortedItemTypes = itemTypes;
+		std::sort(sortedItemTypes.begin(), sortedItemTypes.end(), [](const Item &a, const Item &b) -> bool { return a.GetName().size() > b.GetName().size(); });
+	}
+
+	for (uint32_t i = 0; i < pvariables->size(); i++)
+	{
+		if (pvariables->at(i).key.substr(0, previous_extract.length()) != previous_extract)
+		{
+			group++;
+			previous_extract = bIsItemFile ? GetItemPrefix(pvariables->at(i).key, &sortedItemTypes) : pvariables->at(i).key;
+			if (bIsItemFile && previous_extract.empty())
+				previous_extract = pvariables->at(i).key;
+			entries.push_back(previous_extract);
+		}
+		pvariables->at(i).group = group;
+	}
+	return group;
 }
 
 bool StartsWithStrWildcard(const std::wstring &target, const std::wstring &str)
@@ -2652,35 +3153,25 @@ std::wstring* SanitizeTagStr(std::wstring &str)
 	return &str.assign(out);
 }
 
-std::wstring GetItemPrefix(const std::wstring& VariableKey)
-{
-	for (auto& item : itemTypes)
-	{
-		std::wstring name = *SanitizeTagStr(item.GetName());
-		if (VariableKey.substr(0, name.size()) == name)
-			for (auto i = static_cast<uint32_t>(name.size()); i < VariableKey.size(); i++)
-				if (!isdigit(VariableKey[i]))
-					return VariableKey.substr(0, i);
-	}
-	return std::wstring();
-}
-
 typedef std::pair<int, int64_t> ErrorCode;
-ErrorCode ParseSavegame()
+ErrorCode ParseSavegame(std::wstring *differentfilepath, std::vector<Variable> *varlist)
 {
-#ifdef _DEBUG
 	LARGE_INTEGER frequency;
 	LARGE_INTEGER start;
 	LARGE_INTEGER end;
-	QueryPerformanceFrequency(&frequency);
-	QueryPerformanceCounter(&start);
-	LOG(L"\n");
-	LOG(L"Opening File \"" + filepath + L"\"\n");
-#endif
+	if (dbglog) 
+	{
+		QueryPerformanceFrequency(&frequency);
+		QueryPerformanceCounter(&start);
+		LOG(L"\n");
+		LOG(L"Opening File \"" + (differentfilepath == NULL ? filepath : *differentfilepath) + L"\"\n");
+	}
+
 	using namespace std;
 	int64_t position;
 	uint32_t EmptyTagNum = 0;
-	ifstream iwc(filepath, ios::in | ios::binary);
+	ifstream iwc(differentfilepath == NULL ? filepath : *differentfilepath, ios::in | ios::binary);
+	std::vector<Variable> *pvariables = varlist ? varlist : &variables;
 
 	if (!iwc.is_open())
 		return ErrorCode(13, -1);
@@ -2737,64 +3228,53 @@ ErrorCode ParseSavegame()
 		else
 			SanitizeTagStr(TagStrFormatted);
 
-		variables.push_back(Variable(ValueHeader, ValueStr, static_cast<uint32_t>(variables.size()), TagStrRaw, TagStrFormatted));
+		pvariables->push_back(Variable(ValueHeader, ValueStr, static_cast<uint32_t>(pvariables->size()), TagStrRaw, TagStrFormatted));
 	}
 	iwc.close();
-	std::sort(variables.begin(), variables.end(), [](const Variable &a, const Variable &b) -> bool { return a.key < b.key; } );
+	std::sort(pvariables->begin(), pvariables->end(), [](const Variable &a, const Variable &b) -> bool { return a.key < b.key; } );
 
-	wstring previous_extract(1, '\0');
-	uint32_t group = UINT_MAX;
-	bool bIsItemFile = IsItemFile();
-	for (uint32_t i = 0; i < variables.size(); i++)
-	{
-		if (variables[i].key.substr(0, previous_extract.length()) != previous_extract)
-		{
-			group++;
-			previous_extract = bIsItemFile ? GetItemPrefix(variables[i].key) : variables[i].key;
-			if (bIsItemFile && previous_extract.empty())
-				previous_extract = variables[i].key;
-			entries.push_back(previous_extract);
-		}
-		variables[i].group = group;
-	}
+	uint32_t NumGroups = UINT_MAX;
+	if (!varlist)
+		NumGroups = PopulateGroups(FALSE, pvariables);
 	
-#ifdef _DEBUG
-	QueryPerformanceCounter(&end);
-	LOG(L"Parsing save-file took " + std::to_wstring((end.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart)) + L" seconds.\n");
-	LOG(L"Entries: " + std::to_wstring(variables.size()) + L", Groups: " + std::to_wstring(group + 1) + L"\n");
-	std::vector<int> numdts(EntryValue::Num, 0);
-	std::vector<std::pair<std::wstring, int>> numcts;
-	for (std::vector<Variable>::iterator it = variables.begin(); it != variables.end(); ++it)
+	if (dbglog)
 	{
-		if (!it->header.IsContainer())
-			numdts[it->header.GetValueType()]++;
-		else
+		QueryPerformanceCounter(&end);
+		LOG(L"Parsing save-file took " + std::to_wstring((end.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart)) + L" seconds.\n");
+		LOG(L"Entries: " + std::to_wstring(pvariables->size()) + L", Groups: " + std::to_wstring(NumGroups + 1) + L"\n");
+		std::vector<int> numdts(EntryValue::Num, 0);
+		std::vector<std::pair<std::wstring, int>> numcts;
+		for (std::vector<Variable>::iterator it = pvariables->begin(); it != pvariables->end(); ++it)
 		{
-			bool bExists = FALSE;
-			for (auto &ct : numcts)
+			if (!it->header.IsContainer())
+				numdts[it->header.GetValueType()]++;
+			else
 			{
-				if (it->header.GetContainerDisplayString() == ct.first)
+				bool bExists = FALSE;
+				for (auto &ct : numcts)
 				{
-					bExists = TRUE;
-					ct.second++;
-					break;
+					if (it->header.GetContainerDisplayString() == ct.first)
+					{
+						bExists = TRUE;
+						ct.second++;
+						break;
+					}
 				}
+				if (!bExists)
+					numcts.push_back(std::pair<std::wstring, int>(it->header.GetContainerDisplayString(), 1));
 			}
-			if (!bExists)
-				numcts.push_back(std::pair<std::wstring, int>(it->header.GetContainerDisplayString(), 1));
+		}
+		LOG(L"Data Types:\n");
+		for (uint32_t i = 0; i < numdts.size(); i++)
+		{
+			if (numdts[i] > 0)
+				LOG(L" - " + EntryValue::Ids[i].second + L": " + std::to_wstring(numdts[i]) + L"\n");
+		}
+		LOG(L"Container Types:\n");
+		for (uint32_t i = 0; i < numcts.size(); i++)
+		{
+			LOG(L" - " + numcts[i].first.substr(0, numcts[i].first.size() - 3) + L" : " + std::to_wstring(numcts[i].second) + L"\n");
 		}
 	}
-	LOG(L"Data Types:\n");
-	for (uint32_t i = 0; i < numdts.size(); i++)
-	{
-		if (numdts[i] > 0)
-			LOG(L" - " + EntryValue::Ids[i].second + L": " + std::to_wstring(numdts[i]) + L"\n");
-	}
-	LOG(L"Container Types:\n");
-	for (uint32_t i = 0; i < numcts.size(); i++)
-	{
-		LOG(L" - " + numcts[i].first.substr(0, numcts[i].first.size() - 3) + L" : " + std::to_wstring(numcts[i].second) + L"\n");
-	}
-#endif
-	return entries.empty() ? ErrorCode(34, -1) : ErrorCode(-1, -1);
+	return pvariables->empty() ? ErrorCode(34, -1) : ErrorCode(-1, -1);
 }

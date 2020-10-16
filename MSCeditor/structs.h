@@ -128,3 +128,40 @@ struct Overview
 	uint32_t numStuck = 0;
 	uint32_t numDamaged = 0;
 };
+
+typedef struct 
+{
+	bool bTransform;
+	bool bFloat;
+	bool bString;
+	bool bBoolean;
+	bool bColor;
+	bool bInteger;
+	bool bVector;
+	bool bUnknown;
+	bool bContainer;
+	std::wstring KeyFilter;
+	float FloatDelta;
+} COMPDLGRET;
+
+typedef struct 
+{
+	WORD dlgVer;
+	WORD signature;
+	DWORD helpID;
+	DWORD exStyle;
+	DWORD style;
+	WORD cDlgItems;
+	short x;
+	short y;
+	short cx;
+	short cy;
+} DLGTEMPLATEEX;
+
+typedef struct tag_dlghdr 
+{
+	HWND hwndTab;       // tab control 
+	HWND hwndDisplay;   // current child dialog box 
+	RECT rcDisplay;     // display rectangle for the tab control 
+	DLGTEMPLATEEX *apRes[2];
+} DLGHDR;

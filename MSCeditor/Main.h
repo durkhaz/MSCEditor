@@ -19,11 +19,4 @@
 #include "utils.h"
 #include "resize.h"
 
-#ifdef _DEBUG
-#include <io.h>
-#include <fcntl.h>
-#include <iostream>
-#endif
-
-
 INT_PTR CALLBACK DlgProc(HWND hwnd, uint32_t Message, WPARAM wParam, LPARAM lParam);
