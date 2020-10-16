@@ -12,15 +12,6 @@
 #include "utils.h"
 #include "bcrypt.h"
 
-#if _HAS_CXX17
-template <class _StringViewIsh>
-using _Is_string_view_ish =
-enable_if_t<conjunction_v<is_convertible<const _StringViewIsh&, basic_string_view<_Elem, _Traits>>,
-	negation<is_convertible<const _StringViewIsh&, const _Elem*>>>,
-	int>;
-#endif // _HAS_CXX17
-
-
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 #endif // NT_SUCCESS
@@ -100,97 +91,22 @@ D2D1_SIZE_F GetCursorSize()
 // MAKE SURE THESE AREN'T INCLUDED IN THE SOURCE
 namespace Obfuscate
 {
-	static const auto ByteMin = static_cast<unsigned char>(0);
-	static const auto ByteOne = static_cast<unsigned char>(1);
-	static const auto ByteTwo = static_cast<unsigned char>(2);
-	static const auto ByteRange = static_cast<unsigned char>(253);
-	static const auto ByteMax = static_cast<unsigned char>(255);
-
-	inline bool IsByteObfuscatable(const unsigned char Byte)
-	{
-		return Byte > ByteMin && Byte < ByteMax;
-	}
-
-	inline void ObfuscateByte(unsigned char& Byte, unsigned char& Offset)
-	{
-		if (IsByteObfuscatable(Byte))
-		{
-			Byte = ~Byte;
-			unsigned char nByte = Byte - ByteOne;
-			unsigned char sByte = nByte + Offset;
-			if (sByte <= nByte && Offset > 0)
-				sByte += ByteTwo;
-			else if (sByte > ByteRange)
-				sByte = sByte - ByteRange - ByteOne;
-			Byte = sByte + ByteOne;
-			Offset++;
-			if (Offset > ByteRange)
-				Offset = ByteMin;
-		}
-	}
-
 	HRESULT ObfuscateIStream(IStream* pOutStream)
 	{
-		static const auto buffersize = 1024;
-
-		ULARGE_INTEGER StreamCurrent = { 0 }, StreamSize;
-		HRESULT hr = pOutStream->Seek({ 0 }, STREAM_SEEK_CUR, &StreamSize);
-		BYTE* Buffer = NULL;
-		unsigned char Offset = ByteMin;
-
-		if (SUCCEEDED(hr))
-		{
-			hr = pOutStream->Seek({ 0 }, STREAM_SEEK_SET, NULL);
-			Buffer = new BYTE[buffersize]();
-		}
-
-		while (SUCCEEDED(hr) && StreamCurrent.QuadPart < StreamSize.QuadPart)
-		{
-			ULONG BytesWritten = 0, BytesRead = 0;
-
-			SecureZeroMemory(Buffer, buffersize);
-			hr = pOutStream->Read(Buffer, buffersize, &BytesRead);
-			for (uint32_t i = 0; i < BytesRead; i++)
-				ObfuscateByte(Buffer[i], Offset);
-
-			if (SUCCEEDED(hr))
-			{
-				// Roll back read operation so we can write
-				LARGE_INTEGER Offset; Offset.QuadPart = -static_cast<LONG>(BytesRead);
-				hr = pOutStream->Seek(Offset, STREAM_SEEK_CUR, NULL);
-			}
-			if (SUCCEEDED(hr))
-				hr = pOutStream->Write(Buffer, BytesRead, &BytesWritten);
-
-			StreamCurrent.QuadPart += buffersize;
-		}
-
-		if (Buffer)
-		{
-			delete[] Buffer;
-			Buffer = NULL;
-		}
-		return hr;
+		/* Omitted */
+		return S_OK;
 	}
 
 	HRESULT DeobfuscateResource(BYTE* ResourceBytes, const DWORD imageFileSize, BYTE* OutputBytes)
 	{
-		for (uint32_t i = 0; i < imageFileSize; i++)
-		{
-			BYTE Byte = ResourceBytes[i];
-			if (IsByteObfuscatable(Byte))
-				Byte = ~Byte;
-			OutputBytes[i] = Byte;
-		}
+		/* Omitted */
 		return S_OK;
 	}
 
 	HRESULT IsValidJPG(BYTE* Bytes, const DWORD NumBytes)
 	{
-		if (NumBytes < 5)
-			return E_FAIL;
-
-		return Bytes[0] == 0xFF && Bytes[1] == 0xD8 && Bytes[NumBytes - 2] == 0xFF && Bytes[NumBytes - 1] == 0xD9 ? S_OK : E_FAIL;
+		/* Omitted */
+		return S_OK;
 	}
 }
 
